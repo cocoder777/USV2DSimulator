@@ -1,0 +1,59 @@
+# Unity generated directories
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Bb]uild/
+/[Bb]uilds/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# IDE generated files
+.vs/
+.idea/
+.vscode/
+*.csproj
+*.unityproj
+*.sln
+*.slnx
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Unity generated metadata for ignored IDE artifacts
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# Crash reports and generated packages
+sysinfo.txt
+*.apk
+*.aab
+*.unitypackage
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python caches, environments, and local credentials
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Local example contains a hardcoded API credential; keep it out of history.
+/jev_api/route_ticket.py
+
+# Assets, Packages, ProjectSettings and asset .meta files remain tracked.

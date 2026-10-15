@@ -3,6 +3,30 @@ using UnityEngine;
 
 public class BoatDynamics2D : MonoBehaviour
 {
+    public enum ControlMode { Manual, External }
+    public ControlMode Mode { get; private set; } = ControlMode.Manual;
+    public string RunId { get; private set; } = System.Guid.NewGuid().ToString("N");
+    public double SimulationTime { get; private set; }
+
+    public void SetMode(ControlMode mode)
+    {
+        if (Mode == mode) return;
+        Mode = mode;
+        RunId = System.Guid.NewGuid().ToString("N");
+        ClearControl();
+    }
+
+    // Main-thread interface. Angular input is degrees/s^2, not radians/s^2.
+    public void SetControl(float acceleration, float angularAccelerationDeg)
+    {
+        if (!IsFinite(acceleration) || !IsFinite(angularAccelerationDeg)) return;
+        accelerationCommand = Mathf.Clamp(acceleration, -maxAcceleration, maxAcceleration);
+        angularAccelerationCommand = Mathf.Clamp(angularAccelerationDeg,
+            -maxAngularAccelerationDeg, maxAngularAccelerationDeg) * Mathf.Deg2Rad;
+    }
+
+    public static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+    public void ClearControl() { accelerationCommand = 0f; angularAccelerationCommand = 0f; }
     [Header("运动限制")]
     public float maxAcceleration = 1.5f;
     public float maxForwardSpeed = 5f;
@@ -59,7 +83,7 @@ public class BoatDynamics2D : MonoBehaviour
     private Vector2 startPosition;
     private float startHeadingRad;
 
-    void Start()
+    void Awake()
     {
         position = transform.position;
         headingRad = transform.eulerAngles.z * Mathf.Deg2Rad;
@@ -68,27 +92,12 @@ public class BoatDynamics2D : MonoBehaviour
         startHeadingRad = headingRad;
     }
 
-    void Update()
-    {
-        // W 前进，S 后退
-        accelerationCommand =
-            Input.GetAxisRaw("Vertical") * maxAcceleration;
-
-        // A 左转，D 右转
-        angularAccelerationCommand =
-            -Input.GetAxisRaw("Horizontal")
-            * maxAngularAccelerationDeg * Mathf.Deg2Rad;
-
-        // R 重置
-        if (Input.GetKeyDown(KeyCode.R))
-        {
-            ResetBoat();
-        }
-    }
-
     void FixedUpdate()
     {
         float dt = Time.fixedDeltaTime;
+        SimulationTime += dt;
+        // Parameter changes take effect on an already held command too.
+        SetControl(accelerationCommand, angularAccelerationCommand * Mathf.Rad2Deg);
 
         // 1. 模拟加速度指令的响应延迟
         actualAcceleration = FirstOrderLag(
@@ -157,8 +166,10 @@ public class BoatDynamics2D : MonoBehaviour
         return current + (target - current) * blend;
     }
 
-    void ResetBoat()
+    public void ResetBoat()
     {
+        RunId = System.Guid.NewGuid().ToString("N");
+        SimulationTime = 0;
         position = startPosition;
         headingRad = startHeadingRad;
 

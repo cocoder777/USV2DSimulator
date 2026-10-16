@@ -761,6 +761,9 @@ GameObject:
   - component: {fileID: 1650423691}
   - component: {fileID: 1650423692}
   - component: {fileID: 1650423693}
+  - component: {fileID: 1650423696}
+  - component: {fileID: 1650423695}
+  - component: {fileID: 1650423694}
   m_Layer: 0
   m_Name: Boat
   m_TagString: Untagged
@@ -865,35 +868,6 @@ MonoBehaviour:
   angularAccelerationTimeConstant: 0.25
   linearDamping: 0.2
   angularDamping: 1.2
---- !u!114 &1650423692
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1650423685}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1689ca13e7d14c17b8d671408e445cd1, type: 3}
-  m_Name:
-  m_EditorClassIdentifier: Assembly-CSharp::BoatControlInput
---- !u!114 &1650423693
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1650423685}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 7b088b71997c4f15bdc589ae2e190d42, type: 3}
-  m_Name:
-  m_EditorClassIdentifier: Assembly-CSharp::BoatUdpBridge
-  port: 5005
-  targetAddress: 127.0.0.1
-  targetPort: 5006
-  stateFrequency: 10
-  commandTimeout: 0.5
 --- !u!114 &1650423689
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1031,6 +1005,73 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fbd68996582a5e548b027bda2905a97b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BoatParameterPanel
+--- !u!114 &1650423692
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1650423685}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1689ca13e7d14c17b8d671408e445cd1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BoatControlInput
+--- !u!114 &1650423693
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1650423685}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7b088b71997c4f15bdc589ae2e190d42, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BoatUdpBridge
+  port: 5005
+  targetAddress: 127.0.0.1
+  targetPort: 5006
+  stateFrequency: 10
+--- !u!114 &1650423694
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1650423685}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 061d625f63114dcb9545cdc7e8269f66, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SimulationRunner
+  actionCount: 1
+  actionDuration: 0.4
+--- !u!114 &1650423695
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1650423685}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2d808819816143078a3d91f83cfa20db, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::JevDecisionController
+--- !u!114 &1650423696
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1650423685}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3c97b4615d8c4546a5c402f266157466, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MissionManager
+  routeFile: 
 --- !u!1 &1679133312
 GameObject:
   m_ObjectHideFlags: 0
@@ -1207,8 +1248,8 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 15
-  m_fontSizeBase: 15
+  m_fontSize: 12
+  m_fontSizeBase: 12
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
@@ -1302,7 +1343,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 0fd2abb9f55741b2bf48c12f70522802, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TargetRouteDisplay
   fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   lineWidth: 0.06

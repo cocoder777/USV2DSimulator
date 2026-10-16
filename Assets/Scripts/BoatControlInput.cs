@@ -16,11 +16,21 @@ public class BoatControlInput : MonoBehaviour
 
     void OnGUI()
     {
-        string label = boat.Mode == BoatDynamics2D.ControlMode.Manual
-            ? "Mode: Manual - switch to External" : "Mode: External - switch to Manual";
-        if (GUI.Button(new Rect(10, Screen.height - 45, 290, 32), label))
-            boat.SetMode(boat.Mode == BoatDynamics2D.ControlMode.Manual
-                ? BoatDynamics2D.ControlMode.External : BoatDynamics2D.ControlMode.Manual);
+        float width = Mathf.Max(1, Screen.width - 20);
+        float modeWidth = width * 0.46f;
+        float otherWidth = (width - modeWidth - 12) / 2;
+        string label = "Mode: " + boat.Mode;
+        if (GUI.Button(new Rect(10, Screen.height - 45, modeWidth, 32), label))
+            boat.SetMode((BoatDynamics2D.ControlMode)(((int)boat.Mode + 1) % 2));
+        if (GUI.Button(new Rect(16 + modeWidth, Screen.height - 45, otherWidth, 32), "Reload task"))
+            GetComponent<MissionManager>()?.Reload();
+        var runner = GetComponent<SimulationRunner>();
+        if (boat.Mode == BoatDynamics2D.ControlMode.Jev && runner != null
+            && GUI.Button(new Rect(22 + modeWidth + otherWidth, Screen.height - 45, otherWidth, 32),
+                runner.JevStarted ? "Retry Jev" : "Start Jev"))
+        {
+            if (runner.JevStarted) runner.Retry(); else runner.StartJev();
+        }
     }
 
     void OnDisable() { if (boat != null) boat.ClearControl(); }

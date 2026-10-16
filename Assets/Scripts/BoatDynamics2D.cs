@@ -3,10 +3,15 @@ using UnityEngine;
 
 public class BoatDynamics2D : MonoBehaviour
 {
-    public enum ControlMode { Manual, External }
+    public enum ControlMode { Manual, Jev }
     public ControlMode Mode { get; private set; } = ControlMode.Manual;
+    public string SessionId { get; } = System.Guid.NewGuid().ToString("N");
     public string RunId { get; private set; } = System.Guid.NewGuid().ToString("N");
+    public string EpisodeId { get; private set; } = System.Guid.NewGuid().ToString("N");
+    public long Tick { get; private set; }
     public double SimulationTime { get; private set; }
+    public event System.Action ResetPerformed;
+    public event System.Action ModeChanged;
 
     public void SetMode(ControlMode mode)
     {
@@ -14,6 +19,7 @@ public class BoatDynamics2D : MonoBehaviour
         Mode = mode;
         RunId = System.Guid.NewGuid().ToString("N");
         ClearControl();
+        ModeChanged?.Invoke();
     }
 
     // Main-thread interface. Angular input is degrees/s^2, not radians/s^2.
@@ -82,6 +88,15 @@ public class BoatDynamics2D : MonoBehaviour
     // 用于重置
     private Vector2 startPosition;
     private float startHeadingRad;
+    private float startSpeed, startYawRate;
+
+    public void ConfigureInitialState(TargetRouteData.InitialState initial)
+    {
+        startPosition = new Vector2(initial.x, initial.y);
+        startHeadingRad = initial.heading_deg * Mathf.Deg2Rad;
+        startSpeed = initial.speed;
+        startYawRate = initial.yaw_rate_deg * Mathf.Deg2Rad;
+    }
 
     void Awake()
     {
@@ -92,46 +107,19 @@ public class BoatDynamics2D : MonoBehaviour
         startHeadingRad = headingRad;
     }
 
-    void FixedUpdate()
+    public void Step(float dt)
     {
-        float dt = Time.fixedDeltaTime;
+        if (!IsFinite(dt) || dt <= 0) throw new System.ArgumentOutOfRangeException(nameof(dt));
+        Tick++;
         SimulationTime += dt;
         // Parameter changes take effect on an already held command too.
         SetControl(accelerationCommand, angularAccelerationCommand * Mathf.Rad2Deg);
 
-        // 1. 模拟加速度指令的响应延迟
-        actualAcceleration = FirstOrderLag(
-            actualAcceleration,
-            accelerationCommand,
-            dt,
-            accelerationTimeConstant
-        );
-
-        actualAngularAcceleration = FirstOrderLag(
-            actualAngularAcceleration,
-            angularAccelerationCommand,
-            dt,
-            angularAccelerationTimeConstant
-        );
-
-        // 2. 积分得到线速度和角速度
-        speed +=
-            (actualAcceleration - linearDamping * speed) * dt;
-
-        yawRate +=
-            (actualAngularAcceleration - angularDamping * yawRate) * dt;
-
-        // 3. 限制速度
-        speed = Mathf.Clamp(
-            speed, -maxReverseSpeed, maxForwardSpeed
-        );
-
-        float maxYawRate =
-            maxYawRateDeg * Mathf.Deg2Rad;
-
-        yawRate = Mathf.Clamp(
-            yawRate, -maxYawRate, maxYawRate
-        );
+        (speed, actualAcceleration) = BoatScalarDynamics.Step(speed, actualAcceleration, accelerationCommand,
+            accelerationTimeConstant, linearDamping, dt, -maxReverseSpeed, maxForwardSpeed);
+        (yawRate, actualAngularAcceleration) = BoatScalarDynamics.Step(yawRate, actualAngularAcceleration,
+            angularAccelerationCommand, angularAccelerationTimeConstant, angularDamping, dt,
+            -maxYawRateDeg * Mathf.Deg2Rad, maxYawRateDeg * Mathf.Deg2Rad);
 
         // 4. 积分得到航向角
         headingRad += yawRate * dt;
@@ -152,29 +140,17 @@ public class BoatDynamics2D : MonoBehaviour
         );
     }
 
-    float FirstOrderLag(
-        float current,
-        float target,
-        float dt,
-        float timeConstant)
-    {
-        if (timeConstant <= 0f)
-            return target;
-
-        float blend = 1f - Mathf.Exp(-dt / timeConstant);
-
-        return current + (target - current) * blend;
-    }
-
     public void ResetBoat()
     {
         RunId = System.Guid.NewGuid().ToString("N");
+        EpisodeId = System.Guid.NewGuid().ToString("N");
+        Tick = 0;
         SimulationTime = 0;
         position = startPosition;
         headingRad = startHeadingRad;
 
-        speed = 0f;
-        yawRate = 0f;
+        speed = startSpeed;
+        yawRate = startYawRate;
 
         actualAcceleration = 0f;
         actualAngularAcceleration = 0f;
@@ -193,5 +169,6 @@ public class BoatDynamics2D : MonoBehaviour
         BoatTrail trail = GetComponent<BoatTrail>();
         if (trail != null)
         trail.ClearTrail();
+        ResetPerformed?.Invoke();
     }
 }

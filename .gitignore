@@ -53,7 +53,5 @@ venv/
 .env.*
 !.env.example
 
-# Local example contains a hardcoded API credential; keep it out of history.
-/jev_api/route_ticket.py
-
-# Assets, Packages, ProjectSettings and asset .meta files remain tracked.
+Agent.md
+/docs/bian/Jev仿真实验记录.md

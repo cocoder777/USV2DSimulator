@@ -4,6 +4,16 @@ using UnityEngine;
 public class BoatParameterPanel : MonoBehaviour
 {
     private BoatDynamics2D boat;
+    private MissionManager mission;
+    private Vector2 scrollPosition;
+    private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
+    private static readonly string[] mapDescriptions = {
+        "Original route / 3 checkpoints",
+        "Scattered route / 5 checkpoints",
+        "Alternating bends / 7 checkpoints",
+        "Return bends / 9 checkpoints",
+        "Dense crossings / 9 checkpoints"
+    };
 
     private GUIStyle titleStyle;
     private GUIStyle labelStyle;
@@ -14,6 +24,7 @@ public class BoatParameterPanel : MonoBehaviour
     void Awake()
     {
         boat = GetComponent<BoatDynamics2D>();
+        mission = GetComponent<MissionManager>();
     }
 
     void OnGUI()
@@ -25,8 +36,8 @@ public class BoatParameterPanel : MonoBehaviour
         panelRect = new Rect(
             Mathf.Max(10f, Screen.width - 330f),
             10f,
-            320f,
-            570f
+            Mathf.Min(320f, Screen.width - 20f),
+            Mathf.Max(160f, Mathf.Min(570f, Screen.height - 70f))
         );
 
         GUI.Box(panelRect, GUIContent.none);
@@ -40,6 +51,51 @@ public class BoatParameterPanel : MonoBehaviour
 
         InitializeStyles();
 
+        if (mission != null)
+        {
+            GUILayout.Label("MAP LEVEL", titleStyle);
+            int selected = string.IsNullOrWhiteSpace(mission.routeFile) ? mission.MapLevel : -1;
+            int next = GUILayout.SelectionGrid(selected, mapButtons, 3, GUILayout.Height(52));
+            if (next >= 0 && next != selected) mission.SelectMapLevel(next);
+            GUILayout.Label(string.IsNullOrWhiteSpace(mission.routeFile)
+                ? mapDescriptions[mission.MapLevel] : "Custom task", labelStyle);
+            GUILayout.Label("Switching maps resets the boat and task.", hintStyle);
+            if (!string.IsNullOrEmpty(mission.LoadError)) GUILayout.Label(mission.LoadError, hintStyle);
+            GUILayout.Space(8);
+        }
+
+        scrollPosition = GUILayout.BeginScrollView(scrollPosition);
+        var runner = GetComponent<SimulationRunner>();
+        if (runner != null)
+        {
+            GUILayout.Label("JEV ACTION PLAN", titleStyle);
+            bool enabled = GUI.enabled;
+            GUI.enabled = enabled && !runner.JevStarted;
+            GUILayout.Label($"Actions per request: {runner.actionCount}", labelStyle);
+            int count = Mathf.RoundToInt(GUILayout.HorizontalSlider(runner.actionCount, 1, 10));
+            float duration = Mathf.Round(DrawSlider("Action duration", runner.actionDuration,
+                Time.fixedDeltaTime, 2f, "s") / Time.fixedDeltaTime) * Time.fixedDeltaTime;
+            if (!runner.JevStarted) { runner.actionCount = count; runner.actionDuration = duration; }
+            GUI.enabled = enabled;
+            GUILayout.Label($"Decision period: {runner.DecisionPeriod:F2} simulation s", labelStyle);
+            GUILayout.Label("Set before starting. Reset to change the plan.", hintStyle);
+            if (boat.Mode == BoatDynamics2D.ControlMode.Jev && !runner.JevStarted
+                && GUILayout.Button("Start Jev", GUILayout.Height(28))) runner.StartJev();
+            GUILayout.Space(8);
+        }
+        var trajectory = GetComponent<BoatTrajectoryRecorder>();
+        if (trajectory != null)
+        {
+            if (trajectory.IsPlotting) GUILayout.Label("Generating trajectory plot...", hintStyle);
+            if (!string.IsNullOrEmpty(trajectory.LastImagePath)
+                && GUILayout.Button("Open trajectory plot", GUILayout.Height(28))) trajectory.OpenPlot();
+            if (!string.IsNullOrEmpty(trajectory.ExportError))
+            {
+                GUILayout.Label(trajectory.ExportError, hintStyle);
+                if (trajectory.LastDataPath != null && !trajectory.IsPlotting
+                    && GUILayout.Button("Retry trajectory plot")) trajectory.RetryPlot();
+            }
+        }
         GUILayout.Label("USV PARAMETERS", titleStyle);
         GUILayout.Label("Changes apply immediately.", hintStyle);
         GUILayout.Space(8);
@@ -109,6 +165,7 @@ public class BoatParameterPanel : MonoBehaviour
             hintStyle
         );
 
+        GUILayout.EndScrollView();
         GUILayout.EndArea();
     }
 
@@ -129,6 +186,7 @@ public class BoatParameterPanel : MonoBehaviour
         hintStyle = new GUIStyle(GUI.skin.label);
         hintStyle.fontSize = 11;
         hintStyle.normal.textColor = Color.gray;
+        hintStyle.wordWrap = true;
     }
 
     float DrawSlider(

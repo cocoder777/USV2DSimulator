@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using TMPro;
 using UnityEngine;
 
@@ -12,21 +11,43 @@ public sealed class TargetRouteDisplay : MonoBehaviour
     public string LoadError { get; private set; }
     private GameObject generatedRoot;
     private readonly List<Material> ownedMaterials = new List<Material>();
+    private MissionManager mission;
+    private int displayedProgress = -1;
+    private readonly List<LineRenderer> markers = new List<LineRenderer>();
 
-    void OnEnable() { LoadRoute(); }
+    void OnEnable()
+    {
+        mission = FindAnyObjectByType<MissionManager>();
+        if (mission != null) mission.RouteChanged += ReloadFromMission;
+        if (mission?.Route != null) LoadRoute();
+    }
+
+    private void ReloadFromMission() { LoadRoute(); }
+
+    void LateUpdate()
+    {
+        if (mission?.Progress == null || displayedProgress == mission.Progress.NextIndex) return;
+        displayedProgress = mission.Progress.NextIndex;
+        for (int i = 0; i < markers.Count; i++)
+        {
+            string role = mission.Route.waypoints[i].role;
+            Color roleColor = role == "start" ? Color.green : role == "end" ? Color.red : new Color(1, 0.5f, 0);
+            markers[i].sharedMaterial.color = i < displayedProgress ? Color.cyan : i == displayedProgress ? Color.white : roleColor;
+        }
+    }
 
     public bool LoadRoute()
     {
-        ClearVisuals();
         LoadError = null;
-#if UNITY_EDITOR
-        string path = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "TestData", "fixed_route.json"));
         try
         {
-            var route = TargetRouteData.Parse(File.ReadAllText(path));
+            if (mission == null) mission = FindAnyObjectByType<MissionManager>();
+            var route = mission?.Route;
+            if (route == null) throw new InvalidOperationException("MissionManager has not loaded a task.");
             if (fontAsset == null) throw new InvalidOperationException("Assign the existing TMP font asset.");
             if (!BoatDynamics2D.IsFinite(lineWidth) || lineWidth <= 0)
                 throw new InvalidOperationException("Route line width must be finite and positive.");
+            ClearVisuals();
             // Validate everything before exposing any visuals.
             generatedRoot = new GameObject("TargetRouteVisuals");
             generatedRoot.SetActive(false);
@@ -54,12 +75,16 @@ public sealed class TargetRouteDisplay : MonoBehaviour
                 for (int vertex = 0; vertex < circle.Length; vertex++)
                 {
                     float angle = vertex * Mathf.PI * 2f / circle.Length;
-                    circle[vertex] = pointPosition + new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0) * 0.18f;
+                    circle[vertex] = pointPosition + new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0) * route.arrival_radius_m;
                 }
                 MakeLine("Waypoint_" + point.id, circle, true, 0.07f, 0, material);
+                var marker = generatedRoot.transform.Find("Waypoint_" + point.id).GetComponent<LineRenderer>();
+                // Give each marker its own material so completed colors do not affect all checkpoints.
+                marker.sharedMaterial = CreateMaterial(shader, material.color);
+                markers.Add(marker);
                 var labelObject = new GameObject("Label_" + point.id);
                 labelObject.transform.SetParent(generatedRoot.transform, false);
-                labelObject.transform.position = pointPosition + new Vector3(0, 0.5f, 0);
+                labelObject.transform.position = pointPosition + new Vector3(0, route.arrival_radius_m + 0.3f, 0);
                 var label = labelObject.AddComponent<TextMeshPro>();
                 label.font = fontAsset;
                 label.fontSharedMaterial = fontAsset.material;
@@ -77,15 +102,10 @@ public sealed class TargetRouteDisplay : MonoBehaviour
         catch (Exception exception)
         {
             ClearVisuals();
-            LoadError = "Could not display route at " + path + ": " + exception.Message;
+            LoadError = "Could not display the active mission: " + exception.Message;
             Debug.LogError(LoadError, this);
             return false;
         }
-#else
-        LoadError = "Target route display currently loads project TestData only in Unity Editor; standalone route loading is not supported.";
-        Debug.LogWarning(LoadError, this);
-        return false;
-#endif
     }
 
     private Material CreateMaterial(Shader shader, Color color)
@@ -117,6 +137,8 @@ public sealed class TargetRouteDisplay : MonoBehaviour
     {
         if (generatedRoot != null) { generatedRoot.SetActive(false); Release(generatedRoot); }
         generatedRoot = null;
+        markers.Clear();
+        displayedProgress = -1;
         foreach (Material material in ownedMaterials) if (material != null) Release(material);
         ownedMaterials.Clear();
     }
@@ -127,6 +149,6 @@ public sealed class TargetRouteDisplay : MonoBehaviour
         else DestroyImmediate(value);
     }
 
-    void OnDisable() { ClearVisuals(); }
+    void OnDisable() { if (mission != null) mission.RouteChanged -= ReloadFromMission; ClearVisuals(); }
     void OnDestroy() { ClearVisuals(); }
 }

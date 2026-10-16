@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using UnityEngine;
+using Newtonsoft.Json.Linq;
 
 [DefaultExecutionOrder(-100)]
 [RequireComponent(typeof(BoatDynamics2D))]
@@ -15,42 +16,22 @@ public class BoatUdpBridge : MonoBehaviour
     public string targetAddress = "127.0.0.1";
     public int targetPort = 5006;
     [Min(1f)] public float stateFrequency = 10f;
-    [Min(0.01f)] public float commandTimeout = 0.5f;
     public bool Listening => listening;
-    public string ControlEpoch { get; private set; }
-    public double CommandAge => lastCommandTime < 0 ? -1 : Now - lastCommandTime;
-    public bool ControlActive => listening && boat != null
-        && boat.Mode == BoatDynamics2D.ControlMode.External
-        && lastCommandTime >= 0 && CommandAge <= TimeoutSeconds;
-    public bool TimedOut => boat != null && boat.Mode == BoatDynamics2D.ControlMode.External && !ControlActive;
-    public string CommunicationStatus => transportError ?? (!listening ? "Starting / stopped"
-        : ControlActive ? "Control active" : TimedOut ? "Control timed out / waiting" : "Listening");
-    private double TimeoutSeconds => Math.Max(0.01, commandTimeout);
+    public string CommunicationStatus => transportError ?? (!listening ? "Starting / stopped" : "Listening");
 
-    [Serializable]
-    private class ControlMessage
-    {
-        public string type;
-        public int version = -1;
-        public string run_id;
-        public string control_epoch;
-        public long sequence = -1;
-        public float acceleration = float.NaN;
-        public float angular_acceleration_deg = float.NaN;
-    }
-
-    private struct Received { public string json; public double time; }
     private BoatDynamics2D boat;
     private UdpClient socket;
     private Thread worker;
     private volatile bool stopping, listening;
     private volatile string transportError;
     private readonly object gate = new object();
-    private readonly Queue<Received> incoming = new Queue<Received>();
+    private readonly Queue<string> incoming = new Queue<string>();
     private byte[] outgoing;
-    private long outgoingRevision, lastSequence = -1, stateSequence;
-    private string seenRun;
-    private double lastCommandTime = -1, nextStateTime;
+    private byte[] decisionRequest;
+    private readonly Queue<byte[]> replies = new Queue<byte[]>();
+    public event Action<JObject> DecisionReceived;
+    private long outgoingRevision, stateSequence;
+    private double nextStateTime;
     private static double Now => (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
 
     void Awake() { boat = GetComponent<BoatDynamics2D>(); }
@@ -59,8 +40,6 @@ public class BoatUdpBridge : MonoBehaviour
     {
         stopping = false;
         transportError = null;
-        seenRun = boat.RunId;
-        RotateEpoch();
         nextStateTime = 0;
         try
         {
@@ -92,66 +71,49 @@ public class BoatUdpBridge : MonoBehaviour
         }
     }
 
-    private void RotateEpoch()
+    public void PumpIncoming()
     {
-        ControlEpoch = Guid.NewGuid().ToString("N");
-        lastSequence = -1;
-        lastCommandTime = -1;
-        lock (gate) { incoming.Clear(); }
-        if (boat.Mode == BoatDynamics2D.ControlMode.External) boat.ClearControl();
-    }
-
-    private void RefreshEpoch()
-    {
-        if (seenRun != boat.RunId || (lastCommandTime >= 0 && CommandAge > TimeoutSeconds))
-        {
-            seenRun = boat.RunId;
-            RotateEpoch();
-        }
-    }
-
-    void FixedUpdate()
-    {
-        // Expire the old epoch BEFORE inspecting queued commands, preventing late revival.
-        RefreshEpoch();
         for (int i = 0; i < 64; i++)
         {
-            Received message;
+            string message;
             lock (gate) {
                 if (incoming.Count == 0) break;
                 message = incoming.Dequeue();
             }
-            if (!listening || Now - message.time > TimeoutSeconds
-                || boat.Mode != BoatDynamics2D.ControlMode.External) continue;
+            if (!listening || boat.Mode != BoatDynamics2D.ControlMode.Jev) continue;
             try
             {
-                var control = new ControlMessage();
-                JsonUtility.FromJsonOverwrite(message.json, control);
-                if (control.type != "control" || control.version != 2 || control.run_id != boat.RunId
-                    || control.control_epoch != ControlEpoch || control.sequence < 0
-                    || control.sequence <= lastSequence || !BoatDynamics2D.IsFinite(control.acceleration)
-                    || !BoatDynamics2D.IsFinite(control.angular_acceleration_deg)) continue;
-                boat.SetControl(control.acceleration, control.angular_acceleration_deg);
-                lastSequence = control.sequence;
-                lastCommandTime = message.time;
+                var packet = JObject.Parse(message);
+                if ((string)packet["type"] == "decision_result" || (string)packet["type"] == "decision_error")
+                    DecisionReceived?.Invoke(packet);
             }
-            catch (ArgumentException) { /* Invalid JSON does not refresh the control timeout. */ }
+            catch (Exception exception) when (exception is ArgumentException || exception is Newtonsoft.Json.JsonException
+                || exception is InvalidCastException || exception is FormatException || exception is OverflowException)
+            { /* Invalid datagrams never change the simulation. */ }
         }
-        if (TimedOut) boat.ClearControl();
+    }
+
+    public void SetDecisionRequest(string json)
+    {
+        byte[] bytes = json == null ? null : Encoding.UTF8.GetBytes(json);
+        if (bytes != null && bytes.Length > 8192) throw new ArgumentException("Decision request exceeds 8192-byte protocol budget.");
+        lock (gate) { decisionRequest = bytes; }
+    }
+
+    public void SendPacket(string json)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(json);
+        if (bytes.Length > 8192) throw new ArgumentException("UDP packet exceeds protocol budget.");
+        lock (gate) { if (replies.Count >= 64) replies.Dequeue(); replies.Enqueue(bytes); }
     }
 
     void LateUpdate()
     {
-        RefreshEpoch();
         if (Now < nextStateTime) return;
         nextStateTime = Now + 1.0 / Math.Max(1f, stateFrequency);
         var state = BoatStateSnapshot.Capture(boat);
         state.state_sequence = ++stateSequence;
-        state.control_epoch = ControlEpoch;
-        state.control_active = ControlActive;
-        state.command_timed_out = TimedOut;
-        state.command_age_seconds = CommandAge;
-        byte[] bytes = Encoding.UTF8.GetBytes(JsonUtility.ToJson(state));
+        byte[] bytes = Encoding.UTF8.GetBytes(state.ToJson());
         lock (gate) { outgoing = bytes; outgoingRevision++; }
     }
 
@@ -159,6 +121,8 @@ public class BoatUdpBridge : MonoBehaviour
     private void NetworkLoop(UdpClient boundSocket, IPEndPoint endpoint)
     {
         long sentRevision = -1;
+        double nextDecisionSend = 0;
+        byte[] lastDecision = null;
         var utf8 = new UTF8Encoding(false, true);
         try
         {
@@ -176,7 +140,7 @@ public class BoatUdpBridge : MonoBehaviour
                         catch (DecoderFallbackException) { continue; }
                         lock (gate) {
                             if (incoming.Count >= 64) incoming.Dequeue();
-                            incoming.Enqueue(new Received { json = json, time = Now });
+                            incoming.Enqueue(json);
                         }
                     }
                     byte[] snapshot; long revision;
@@ -186,6 +150,12 @@ public class BoatUdpBridge : MonoBehaviour
                         if (snapshot.Length <= 8192) boundSocket.Send(snapshot, snapshot.Length, endpoint);
                         sentRevision = revision;
                     }
+                    byte[] decision, reply = null;
+                    lock (gate) { decision = decisionRequest; if (replies.Count > 0) reply = replies.Dequeue(); }
+                    if (reply != null) boundSocket.Send(reply, reply.Length, endpoint);
+                    if (decision != lastDecision) { lastDecision = decision; nextDecisionSend = 0; }
+                    if (decision != null && Now >= nextDecisionSend)
+                    { boundSocket.Send(decision, decision.Length, endpoint); nextDecisionSend = Now + 0.3; }
                 }
                 catch (SocketException exception) when (exception.SocketErrorCode == SocketError.ConnectionReset
                     || exception.SocketErrorCode == SocketError.ConnectionRefused
@@ -205,7 +175,6 @@ public class BoatUdpBridge : MonoBehaviour
         // Socket closure unblocks receive; joining prevents a previous worker using new state on re-enable.
         worker?.Join();
         worker = null;
-        lock (gate) { incoming.Clear(); outgoing = null; socket = null; }
-        if (boat != null && boat.Mode == BoatDynamics2D.ControlMode.External) boat.ClearControl();
+        lock (gate) { incoming.Clear(); replies.Clear(); outgoing = null; decisionRequest = null; socket = null; }
     }
 }

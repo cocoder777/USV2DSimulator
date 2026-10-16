@@ -14,11 +14,14 @@ public class BoatHUD : MonoBehaviour
 
         BoatUdpBridge bridge = boat.GetComponent<BoatUdpBridge>();
         string connection = bridge == null ? "Unavailable" : bridge.CommunicationStatus;
-        string age = bridge == null || bridge.CommandAge < 0 ? "--" : bridge.CommandAge.ToString("F2") + " s";
+        var mission = boat.GetComponent<MissionManager>();
+        var decision = boat.GetComponent<SimulationRunner>();
         statusText.text =
             "USV 2D SIMULATOR\n" +
-            $"Mode: {boat.Mode}\nUDP: {connection}\nCommand age: {age}\n" +
-            (bridge != null && bridge.TimedOut ? "Control: waiting / timed out\n" : "") +
+            $"Mode: {boat.Mode}\nUDP: {connection}\n" +
+            $"Task: {mission?.Status ?? "NoTask"}  Next: {mission?.Progress?.Next?.id ?? "--"}\n" +
+            $"Decision: {decision?.Status ?? "--"}\n" +
+            $"Plan: {decision?.actionCount} actions x {decision?.actionDuration:F2} s\n" +
 
             $"Position X: {boat.Position.x:F2} m\n" +
             $"Position Y: {boat.Position.y:F2} m\n" +

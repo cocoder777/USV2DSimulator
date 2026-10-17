@@ -4,7 +4,7 @@ using System;
 public class BoatStateSnapshot
 {
     public string type = "state";
-    public int version = 4;
+    public int version = SimulationRunner.ProtocolVersion;
     public string session_id, episode_id;
     public long tick;
     public long state_sequence;
@@ -18,8 +18,7 @@ public class BoatStateSnapshot
     public BoatParameters parameters;
     public MissionSnapshot mission;
     public string scheduler_state, decision_id;
-    public int action_count;
-    public float decision_period_s, action_duration_s;
+    public float action_duration_s;
 
     public string ToJson() => Newtonsoft.Json.JsonConvert.SerializeObject(this);
 
@@ -38,7 +37,7 @@ public class BoatStateSnapshot
             parameters = BoatParameters.Capture(boat), mission = MissionSnapshot.Capture(boat.GetComponent<MissionManager>()),
             waiting_for_decision = runner?.IsWaiting ?? false,
             scheduler_state = runner?.State.ToString(), decision_id = runner?.DecisionId,
-            action_count = runner?.actionCount ?? 0, decision_period_s = runner?.DecisionPeriod ?? 0, action_duration_s = runner?.actionDuration ?? 0
+            action_duration_s = runner?.actionDuration ?? 0
         };
     }
 }

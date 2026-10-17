@@ -1,6 +1,6 @@
-# Jev API 调用说明
+# Jev 单动作调用协议
 
-当前项目每个动作使用两道 Score，分别决定有符号线加速度和角加速度。Jev 只获得当前船状态、当前目标、动力学参数和动作配置。参考路线仅用于监控显示及轨迹导出对比。
+每次决策只选择一个动作：Unity 暂停并提供最新状态，Python 请求 Jev，Unity 执行返回的线/角加速度组合，执行结束后再次暂停并请求下一次决策。默认每个动作持续 0.4 秒。
 
 ## 1. 启动与接口
 
@@ -8,7 +8,7 @@
 python jev_api/boat_client.py --log Logs/jev.jsonl
 ```
 
-Unity Play 后选择 Jev 模式，设置动作数量和持续时间，点击 `Start Jev`。默认一个动作、持续 0.4 秒；每批支持 1～10 个动作。等待回答期间仿真暂停。
+Unity Play 后选择 Jev 模式，在 `JEV CONTROL` 设置动作持续时间，点击 `Start Jev`。运行期间时长锁定，重置后可重新设置。等待 Jev 回答期间仿真暂停，界面继续响应。
 
 ```text
 POST https://api.typesafe.ai/v1/systemone
@@ -16,107 +16,102 @@ Authorization: Bearer <API_KEY>
 Content-Type: application/json
 ```
 
-请求顶层为 `model`、`state` 和 `questions`。默认模型为 `jev-latest`，可通过 `--model` 指定。客户端使用 Python 标准库直接请求 HTTP；`route_ticket.py` 为独立 SDK 示例，不参与控制。Key 只用于请求头，不进入模型输入或日志。
+HTTP 请求顶层为 `model`、`state`、`questions`。默认模型 `jev-latest`，可用 `--model` 指定。客户端仅用 Python 标准库发起 HTTP 请求；Key 只进入请求头，不进入输入或日志。
 
-官方资料：[API](https://docs.typesafe.ai/api)、[Score](https://docs.typesafe.ai/primitives/score)、[State](https://docs.typesafe.ai/concepts/state)、[问题独立求值](https://docs.typesafe.ai/primitives)。
+官方资料：[API](https://docs.typesafe.ai/api)、[Choice](https://docs.typesafe.ai/primitives/choice)、[State](https://docs.typesafe.ai/concepts/state)。
 
-## 2. 输入在哪里生成
+## 2. 可用信息与坐标
 
-1. `SimulationRunner.BeginDecision()` 调用 `ObservationBuilder.ForModel()`。
-2. Unity 生成 `decision_request`，通过 `BoatUdpBridge` 发送给 Python。
-3. `boat_client.py:build_payload()` 按字段白名单构造 HTTP 请求，并添加任务说明和问题。
-4. `call_api()` 请求 Jev；`decode_actions()` 解析 Score；`decide()` 组装结果返回 Unity。
+1. `SimulationRunner.BeginDecision()` 调用 `ObservationBuilder.ForModel()`，采集船状态及当前目标。
+2. `BoatUdpBridge` 将 `decision_request` 发给 Python。
+3. `choice_control.py:build_payload()` 转换目标坐标，构建唯一一道 `action_0` Choice。
+4. `call_api()` 请求 Jev；`decode_action()` 将选项名称映射为一个线/角加速度索引对。
 
-### HTTP state
-
-| 字段 | 内容 |
+| HTTP state 字段 | 内容 |
 | --- | --- |
-| `coordinates` | 全局 XY 米制坐标；航向为度，东为 0、北为 90，逆时针为正 |
-| `planning` | `action_count`、`action_duration_s`、`simulation_paused_while_deciding` |
-| `boat` | `position_xy_m`、`heading_deg`、`speed_mps`、`yaw_rate_deg_s`、两轴实际执行器加速度 |
-| `target` | 当前目标的 `position_xy_m`、`arrival_radius_m`、`requires_stop`、`stop_speed_mps` |
-| `dynamics` | 速度及加速度限制、两轴执行器响应时间常数、阻尼 |
-| `motion` | 有符号速度沿船头运动、执行器一阶滞后及阻尼的简短说明 |
-| `task` | 到达当前目标；需要停车时，在目标半径内同时满足绝对速度阈值 |
+| `coordinates` | 决策时刻的船体坐标定义、方向及单位 |
+| `planning` | `action_duration_s`、`simulation_paused_while_deciding` |
+| `boat` | 有符号线速度 `speed_mps`、角速度 `yaw_rate_deg_s` |
+| `target` | `forward_m`、`left_m`、到达半径；仅终点携带停车速度阈值 |
+| `dynamics` | 速度和加速度限制、阻尼 |
+| `motion` | 加速度、速度、角速度、航向和位置之间的关系 |
 
-UDP 观测另带 `actions`，包含共享档位比例。Python 用它生成 Score 等级的实际输入值，HTTP state 不重复携带比例数组。
-
-模型输入不包含参考曲线、后续任务点、坐标变换、距离或方位辅助量、推荐速度或角速度，也不计算候选运动预测。地图中任务点列表仍由本地任务判断使用；每次只向模型发送当前目标。
-
-## 3. 提示词与动作链
-
-`build_payload()` 添加共同任务说明；`make_instructions()` 统一生成两轴问题，仅控制轴名称不同，没有额外的角输入提示分支。
-
-单动作示例：
+本地原始观测用全局坐标，并以 `action_space` 提供八档线输入及七档角输入比例。Python 根据目标与船的位置差 dx、dy，以及航向 h，转换为：
 
 ```text
-What signed longitudinal acceleration command is appropriate to reach the current target for the next 0.4 seconds? The supplied boat state is the state at the start of this interval.
+forward_m = dx*cos(h) + dy*sin(h)
+left_m    = -dx*sin(h) + dy*cos(h)
 ```
 
-三个动作中的第二个角输入问题：
+HTTP state 不包含全局位置与航向。船体坐标中船位于原点并朝向前方，forward 正数表示前方，left 正数表示左侧，角运动逆时针为正。`coordinates` 是自定义的说明文本，不是 API 内置坐标配置。目标固定在世界中，相对坐标随船移动和旋转而变化。
 
-```text
-What signed angular acceleration command is appropriate to reach the current target for action 2 of 3, during [0.4, 0.8) seconds after simulation resumes? The supplied boat state is measured at time zero. No updated state is supplied for later intervals. All actions are requested together and executed in order without intermediate feedback.
-```
+模型不接收参考路线、未来目标、指导速度、指导角速度、距离/方位误差辅助量、预测轨迹、实际执行器加速度或响应时间常数。全局状态与物理执行数据仍可供监控和轨迹对比使用。
 
-每个动作生成 `acceleration_i`、`turn_i`，问题均为 `type: score`，`criteria` 为有序字符串数组。问题 ID 仅用于关联响应，实际含义在 `instructions` 中完整表达。
+## 3. 题目与选项
 
-所有问题独立求值：后一道题看不到前一道题的答案。动作链按序执行，但不保证模型完成了相互衔接的规划；提示词不会要求依赖未提供的前序答案。
+本地读取原始观测中的 `requires_stop`，选择 `CHECKPOINT_TASK` 或 `PARKING_TASK`，从 HTTP state 删除该标志。Jev 只看到当前适用的目标说明。
 
-## 4. 等级与加速度
+- 打卡点：进入到达圈即可，不要求停车；必要时可减速以避免错过目标圈。
+- 终点：在到达圈内同时满足低速条件。停车阈值只约束完成时刻，远处应保持有效接近；已有动量可能导致越过停车区时提前制动，必要时边减速边转向。
 
-线输入八级比例：
+`TASK` 保留现有运动规则、方向说明和状态示例，`make_instructions(duration, requires_stop)` 组合当前目标说明，并询问接下来指定时长内的动作。
+
+每次只有一道 `action_0`，包含 56 个联合选项。线输入八档比例为：
 
 ```text
 [-1, -2/3, -1/3, 0, 0.25, 0.5, 0.75, 1]
 ```
 
-角输入七级比例：
+角输入七档比例为：
 
 ```text
 [-1, -0.5, -0.25, 0, 0.25, 0.5, 1]
 ```
 
-等级描述包含方向、强度和当前参数下的实际指令值。线输入正值增加有符号速度，角输入正值为逆时针角加速度；零输入不代表立即停止。
+`criteria` 为“选项名称 → 适用情境与两个实际加速度数值”的对象。现有打卡/停车规则、运动示例及 56 个选项的导航含义保持不变。
 
-Score 返回等级位置：线输入范围 0～7，角输入范围 0～6，可为小数。它是等级位置的概率加权平均，不是直接输出的物理加速度。Python 采用 `floor(score + 0.5)` 取最近等级，恰好半级时向上取整。例如 4.2 映射线索引 4；2.5 映射角索引 3。之后按原有比例乘最大加速度，不对物理加速度插值。
+完整示例：[打卡请求](../../jev_api/examples/choice56_request.json)、[终点停车请求](../../jev_api/examples/choice56_parking_request.json)。
 
-`decode_actions()` 检查问题 ID 完全匹配、类型为 Score、分数为有限数且在范围内；布尔值、字符串、缺项、额外问题或越界分数均报错。概率及置信度记录在原始响应中，不用于再次选择动作。
+供本地解码的 API 响应关键内容：
 
-## 5. 返回与执行
+```json
+{"answers":{"action_0":{"type":"choice","choice":"positive_gentle__clockwise_gentle"}}}
+```
 
-Unity/Python 外层协议仍为 version 4。请求身份字段为 `session_id`、`episode_id`、`run_id`、`decision_id`、`tick`；不发送给 Jev，返回时原样带回。
+`decode_action()` 严格检查唯一的问题 ID、类型和选项名称，直接返回 `acceleration_index=4, turn_index=2`。概率和置信度保存在原始响应中，不在本地重新选择动作；非法响应返回错误并暂停。
 
-成功结果仍使用原有动作格式，例如：
+## 4. Unity/Python 单动作协议
+
+内部 UDP 使用 **version 5**，双方需要一起更新。旧版本数据不被接受。
 
 ```json
 {
-  "type": "decision_result",
-  "version": 4,
-  "session_id": "s",
-  "episode_id": "e",
-  "run_id": "r",
-  "decision_id": "d",
-  "tick": 0,
-  "actions": [
-    {"acceleration_index": 4, "turn_index": 2}
-  ],
-  "action_duration_s": 0.4
+  "type":"decision_result",
+  "version":5,
+  "session_id":"s",
+  "episode_id":"e",
+  "run_id":"r",
+  "decision_id":"d",
+  "tick":0,
+  "action":{"acceleration_index":4,"turn_index":2},
+  "action_duration_s":0.4
 }
 ```
 
-`SimulationRunner.ReceiveDecision()` 校验身份、动作数、索引和时长。`BoatActionSequence` 顺序执行每个动作，将索引转换为线/角加速度；`BoatDynamics2D.Step()` 推进物理。每批结束后以最新状态请求下一批，任务完成时提前结束。
+`SimulationRunner.ReceiveDecision()` 校验身份、采样 tick、动作索引和持续时间。`BoatActionExecutor` 只持有一个动作及剩余执行步数，通过 `DiscreteAction` 的档位定义设置控制量，由 `BoatDynamics2D.Step()` 推进物理。
 
-UDP 重发、结果缓存及确认机制保留。周期性 `type: state` 广播仅作状态传输，不触发 API。HTTP 或解析失败时返回 `decision_error`，Unity 暂停并允许 `Retry Jev`；没有本地备用控制器，也没有决策超时。
+动作必须执行整数个物理步，默认 0.4 秒对应 20 步。动作结束后取消控制并用最新状态请求下一次决策；任务完成时提前停止剩余执行。等待回答时不推进物理。重复响应只确认、不重启动作，过期响应不影响当前决策；非法动作或时长不匹配会暂停并报告错误。
 
-## 6. 日志与验证
+UDP 重发、缓存和确认机制保持原逻辑。API 失败时使用 `Retry Jev`，没有本地备用控制器或决策超时。
 
-`--log` 每次记录原始 UDP `request`、实际 HTTP `payload`、`raw_response`、返回 Unity 的 `result` 和 `elapsed_s`。生成观测时已删除决策辅助信息，因此不会在原始请求日志中继续保存它们。已有历史文件不自动重写。
+## 5. 日志与验证
 
-离线协议检查，不调用真实 API：
+`--log` 记录原始 UDP `request`、实际 HTTP `payload`、`raw_response`、单动作 `result` 及 API 耗时。状态广播保留 `action_duration_s`；每条决策只对应一个动作。
+
+离线协议测试：
 
 ```powershell
 python -m unittest discover -s jev_api -p "test_*.py" -v
 ```
 
-历史实验结果见 [Jev仿真实验记录](Jev仿真实验记录.md)，不能作为当前简化 Score 输入方案的效果证明。
+全部历史改动、实验及测试统一记录在 [Jev 仿真实验记录](Jev仿真实验记录.md)，后续也只更新该文件，不另建实验或验证记录。历史协议字段仅反映当时配置。

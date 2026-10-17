@@ -21,7 +21,7 @@ public class BoatHUD : MonoBehaviour
             $"Mode: {boat.Mode}\nUDP: {connection}\n" +
             $"Task: {mission?.Status ?? "NoTask"}  Next: {mission?.Progress?.Next?.id ?? "--"}\n" +
             $"Decision: {decision?.Status ?? "--"}\n" +
-            $"Plan: {decision?.actionCount} actions x {decision?.actionDuration:F2} s\n" +
+            $"Action duration: {decision?.actionDuration:F2} s\n" +
 
             $"Position X: {boat.Position.x:F2} m\n" +
             $"Position Y: {boat.Position.y:F2} m\n" +

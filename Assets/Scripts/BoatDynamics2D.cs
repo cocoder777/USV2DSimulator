@@ -42,8 +42,8 @@ public class BoatDynamics2D : MonoBehaviour
     public float maxYawRateDeg = 45f;
 
     [Header("响应延迟")]
-    public float accelerationTimeConstant = 0.25f;
-    public float angularAccelerationTimeConstant = 0.25f;
+    public float accelerationTimeConstant = 0f;
+    public float angularAccelerationTimeConstant = 0f;
 
     [Header("阻尼")]
     public float linearDamping = 0.2f;

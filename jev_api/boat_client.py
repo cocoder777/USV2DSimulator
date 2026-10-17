@@ -2,7 +2,6 @@
 import argparse
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-import copy
 import json
 import math
 import socket
@@ -10,9 +9,12 @@ import time
 import urllib.error
 import urllib.request
 
+from choice_control import ACTION_CHOICES, MODEL_STATE_FIELDS, build_payload, decode_action, make_instructions
+
 API_KEY = 'apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141'
 
 MAX_PACKET = 8192
+PROTOCOL_VERSION = 5
 IDENTITY_FIELDS = ("session_id", "episode_id", "run_id", "decision_id", "tick")
 
 
@@ -25,7 +27,7 @@ def dumps(value):
 
 
 def valid_request(packet):
-    if not isinstance(packet, dict) or packet.get("version") != 4 or packet.get("type") != "decision_request":
+    if not isinstance(packet, dict) or type(packet.get("version")) is not int or packet.get("version") != PROTOCOL_VERSION or packet.get("type") != "decision_request":
         return False
     if any(not isinstance(packet.get(k), str) or not packet[k] for k in IDENTITY_FIELDS[:-1]):
         return False
@@ -34,100 +36,15 @@ def valid_request(packet):
     try:
         obs = packet["observation"]
         planning = obs["planning"]
-        count, duration = planning["action_count"], planning["action_duration_s"]
-        if type(count) is not int or not 1 <= count <= 10:
+        duration = planning["action_duration_s"]
+        if "action_count" in planning or "actions" in obs:
             return False
         if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
             return False
-        return len(obs["actions"]["acceleration_fractions"]) == 8 and len(obs["actions"]["turn_fractions"]) == 7
+        return len(obs["action_space"]["acceleration_fractions"]) == 8 and len(obs["action_space"]["turn_fractions"]) == 7
     except (KeyError, TypeError):
         return False
 
-
-
-ACCEL_LABELS = (
-    "Maximum negative input; strongest reduction of signed speed.",
-    "Medium negative input; clear reduction of signed speed.",
-    "Mild negative input; gentle reduction of signed speed.",
-    "Zero input; speed changes under actuator lag and drag.",
-    "Small positive input; gentle increase of signed speed.",
-    "Medium positive input; clear increase of signed speed.",
-    "Large positive input; rapid increase of signed speed.",
-    "Maximum positive input; strongest increase of signed speed.",
-)
-TURN_LABELS = (
-    "Maximum clockwise input; strongly decrease signed yaw rate.",
-    "Medium clockwise input; clearly decrease signed yaw rate.",
-    "Mild clockwise input; gently decrease signed yaw rate.",
-    "Zero input; rotation changes under actuator lag and damping.",
-    "Mild counterclockwise input; gently increase signed yaw rate.",
-    "Medium counterclockwise input; clearly increase signed yaw rate.",
-    "Maximum counterclockwise input; strongly increase signed yaw rate.",
-)
-MODEL_STATE_FIELDS = ("coordinates", "planning", "boat", "target", "dynamics", "motion")
-
-
-def make_instructions(axis, index, count, duration):
-    command = {"acceleration": "longitudinal acceleration", "turn": "angular acceleration"}[axis]
-    if count == 1:
-        timing = (f"for the next {duration:.6g} seconds? "
-                  "The supplied boat state is the state at the start of this interval.")
-    else:
-        begin, end = index * duration, (index + 1) * duration
-        timing = (f"for action {index + 1} of {count}, during [{begin:.6g}, {end:.6g}) seconds "
-                  "after simulation resumes? The supplied boat state is measured at time zero. "
-                  "No updated state is supplied for later intervals. All actions are requested together "
-                  "and executed in order without intermediate feedback.")
-    return f"What signed {command} command is appropriate to reach the current target " + timing
-
-
-def build_payload(observation, model="jev-latest"):
-    state = {field: copy.deepcopy(observation[field]) for field in MODEL_STATE_FIELDS}
-    planning, dyn = state["planning"], state["dynamics"]
-    fractions = observation["actions"]
-    criteria_a = [label + f" Command: {float(f) * dyn['max_acceleration']:.4g} m/s^2."
-                  for label, f in zip(ACCEL_LABELS, fractions["acceleration_fractions"])]
-    criteria_t = [label + f" Command: {float(f) * dyn['max_angular_acceleration_deg']:.4g} deg/s^2."
-                  for label, f in zip(TURN_LABELS, fractions["turn_fractions"])]
-    state["task"] = (
-        "Navigate the boat to the current target using global XY coordinates. "
-        "For a pass-through target, enter its arrival radius. "
-        "For a stop target, be inside its arrival radius with absolute speed at or below the stop threshold. "
-        "The target.requires_stop field specifies which rule applies. "
-        "Commands are signed longitudinal acceleration and angular acceleration. "
-        "Positive longitudinal acceleration increases signed speed; positive angular acceleration acts counterclockwise. "
-        "Zero command does not immediately stop motion. "
-        "Account for current velocity, rotation, actuator lag and damping.")
-    questions = {}
-    for i in range(planning["action_count"]):
-        for axis, criteria in (("acceleration", criteria_a), ("turn", criteria_t)):
-            questions[f"{axis}_{i}"] = {
-                "type": "score",
-                "instructions": make_instructions(axis, i, planning["action_count"], planning["action_duration_s"]),
-                "criteria": criteria,
-            }
-    return {"model": model, "state": state, "questions": questions}
-
-
-def decode_actions(response, count):
-    answers = response.get("answers")
-    expected = {f"{axis}_{i}" for i in range(count) for axis in ("acceleration", "turn")}
-    if not isinstance(answers, dict) or set(answers) != expected:
-        raise ValueError("Expected exactly two matching answers per action")
-    actions = []
-    for i in range(count):
-        action = {}
-        for name, maximum in (("acceleration", 7), ("turn", 6)):
-            answer = answers[f"{name}_{i}"]
-            if not isinstance(answer, dict) or answer.get("type") != "score":
-                raise ValueError(f"Missing or wrong answer type for {name}_{i}")
-            score = answer.get("score")
-            if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= maximum:
-                raise ValueError(f"Invalid score for {name}_{i}")
-            # Nearest level, with exact half-levels rounded upward; keep Unity's discrete wire contract.
-            action[name + "_index"] = math.floor(score + 0.5)
-        actions.append(action)
-    return actions
 
 
 def call_api(payload, key, endpoint):
@@ -143,13 +60,13 @@ def call_api(payload, key, endpoint):
 def decide(packet, settings, key, log):
     started = time.monotonic()
     envelope = {k: packet[k] for k in IDENTITY_FIELDS}
-    envelope["version"] = 4
+    envelope["version"] = PROTOCOL_VERSION
     payload = None
     try:
         payload = build_payload(packet["observation"], settings.model)
         raw = call_api(payload, key, settings.endpoint)
-        actions = decode_actions(raw, packet["observation"]["planning"]["action_count"])
-        result = dict(envelope, type="decision_result", actions=actions,
+        action = decode_action(raw)
+        result = dict(envelope, type="decision_result", action=action,
                       action_duration_s=packet["observation"]["planning"]["action_duration_s"])
     except Exception as error:
         raw = None
@@ -158,7 +75,7 @@ def decide(packet, settings, key, log):
         log.write(dumps({"event": "decision", "elapsed_s": time.monotonic() - started,
                          "request": packet, "payload": payload, "raw_response": raw, "result": result}) + "\n")
         log.flush()
-    print(dumps({"event": result["type"], "tick": packet["tick"], "actions": result.get("actions"),
+    print(dumps({"event": result["type"], "tick": packet["tick"], "action": result.get("action"),
                  "error": result.get("error"), "elapsed_s": round(time.monotonic() - started, 3)}), flush=True)
     return result
 
@@ -217,6 +134,8 @@ def serve(settings):
                 if not isinstance(packet, dict):
                     continue
                 if packet.get("type") == "state":
+                    if packet.get("version") != PROTOCOL_VERSION:
+                        continue
                     if (packet.get("mission") or {}).get("status") == "Completed" and settings.exit_on_complete:
                         if log:
                             log.write(dumps({"event": "completed", "state": packet}) + "\n"); log.flush()
@@ -225,7 +144,7 @@ def serve(settings):
                         return
                     continue
                 request_id = identity(packet)
-                if packet.get("type") == "decision_ack" and packet.get("version") == 4:
+                if packet.get("type") == "decision_ack" and packet.get("version") == PROTOCOL_VERSION:
                     awaiting_ack.pop(request_id, None)
                     continue
                 if not valid_request(packet):

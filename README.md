@@ -4,9 +4,9 @@
 
 ## 功能
 
-- **二维运动**：前进、减速、后退和转向，包含速度与加速度限制、阻尼和响应延迟。
-- **手动 / Jev 控制**：WASD 操作，或由 Jev 返回动作批次并顺序执行。
-- **实时参数面板**：调整动力学参数，选择地图、动作数量和单动作持续时间。
+- **二维运动**：前进、减速、后退和转向，包含速度与加速度限制、阻尼；当前简化配置的加速度指令立即生效。
+- **手动 / Jev 控制**：WASD 操作，或由 Jev 每次选择一个动作，执行后依据最新状态重新决策。
+- **实时参数面板**：调整动力学参数，选择地图和动作持续时间。
 - **任务与轨迹**：显示参考路线和实际轨迹，按序打卡并判断终点停车；完成后自动导出轨迹数据和对比图。
 
 ## 环境
@@ -46,32 +46,57 @@ cd USV2DSimulator
 
 ### 3. Jev 控制
 
-按 [Jev API 调用说明](docs/bian/当前控制与Jev协议.md) ，使用`python jev_api/boat_client.py`启动 Python 客户端。
+首次使用按以下顺序操作：
 
-在右侧 `JEV ACTION PLAN` 中设置动作数量（1～10）和单动作持续时间，切换到 Jev 模式，点击 **`Start Jev`**。开始后这两个参数锁定；按 R 重置后可以重新调整。初始配置为 1 个动作、每个持续 0.4 秒。
+1. 保持 Unity 已打开 `Main.unity` 并进入 Play；首次测试选择右侧 **Level 0**。
+2. 在项目根目录打开 PowerShell，创建日志目录并启动客户端：
 
-每个动作通过两道 Score 决定线加速度和角加速度档位。Jev 仅接收全局坐标下的船状态、当前目标、动力学参数和动作配置；参考路线只用于显示和轨迹对比。多动作问题独立求值，整批按序执行。
+   ```powershell
+   New-Item -ItemType Directory -Force Logs | Out-Null
+   python jev_api/boat_client.py --log Logs/jev.jsonl
+   ```
 
-等待回答时仿真暂停，界面仍可操作。调用失败时点击 `Retry Jev`，或切回 Manual。
+3. 终端出现 `Jev worker listening on 127.0.0.1:5006` 表示客户端已启动，保持这个终端运行。默认 Unity 使用本机 UDP 5005，Python 使用 5006。
+4. 回到 Unity，点击左下角模式按钮切换为 **Jev**。在右侧 **`JEV CONTROL`** 设置 **Action duration = 0.40 s**，再点击 **`Start Jev`**。
+
+只切换 Jev 模式还不会开始决策，必须点击 `Start Jev`。开始后时长锁定；按 R 重置后可重新设置。
+
+**如何确认运行正常：**界面在 `Waiting` 和 `Executing` 间切换，船的位置随执行更新；终端持续输出 `decision_result`，`Logs/jev.jsonl` 记录实际请求、响应和动作。`Waiting` 期间船保持静止是当前设计：等待 API 不消耗仿真时间，收到动作后才执行下一段 0.4 秒。
+
+## 当前 Jev 决策方式
+
+每次请求一道 `action_0` Choice，从 8×7 个组合中选择线/角加速度，执行结束后用最新状态重新决策。Python 将当前目标转为船体坐标，提供线速度、角速度及必要物理参数，并按目标类型生成打卡或停车题目；参考路线仅供显示和轨迹对比。
+
+当前两个执行器时间常数均为零，决策期间暂停物理仿真。Unity/Python 使用 version 5 协议，每次返回一个 `action` 对象。字段与处理过程见 [Jev API 调用说明](docs/bian/当前控制与Jev协议.md)。
 
 ## 地图与任务
 
 右侧 `MAP LEVEL` 可选择 **Level 0～4**，包含基础路线、交替弯道、折返和密集交叉路线。切换地图会重置小船及任务；`Reload task` 重新加载当前地图。
 
-按序通过任务点；中间点不要求停车，终点需要同时满足距离和速度要求。参考路线供监控和轨迹对比查看。完成任务后，本局仿真暂停。
+按序通过任务点；中间点不要求停车，默认终点要求同时满足“距离不超过 1 米”和“绝对线速度不超过 0.1 m/s”，不要求角速度归零。参考路线供监控和轨迹对比查看。完成任务后，本局仿真暂停。
 
 地图数据位于 `Assets/StreamingAssets/fixed_route.json` 和 `Assets/StreamingAssets/Maps/`，Editor 与独立程序均从这里加载。
 
-## 轨迹导出
+## 轨迹自动导出
 
-首次使用轨迹绘图时，在项目根目录运行：
+任务完成、状态变为 **Completed** 后，程序自动保存轨迹 JSON，并调用绘图程序生成 PNG 对比图，无需手动导出。图片生成后，点击右侧 **`Open trajectory plot`** 查看。
+
+- Unity Editor：`Logs/trajectories/`
+- 独立程序：`Application.persistentDataPath/Trajectories/`
+
+<details>
+<summary>首次使用时的绘图环境配置</summary>
+
+PNG 生成依赖 Python 和 Matplotlib；环境已配置时无需重复操作。首次需要配置时，在项目根目录运行：
 
 ```powershell
 python -m pip install -r Assets/StreamingAssets/Tools/requirements.txt
 python Tools/configure_trajectory_plot.py
 ```
 
-任务完成后自动保存 JSON 和 PNG，点击右侧 **`Open trajectory plot`** 查看。Editor 输出到 `Logs/trajectories/`；独立程序输出到 `Application.persistentDataPath/Trajectories/`。绘图失败时，面板会显示原因并提供重试按钮。
+配置完成后，每局任务完成都会自动导出轨迹并生成图片。
+
+</details>
 
 ## 项目结构
 

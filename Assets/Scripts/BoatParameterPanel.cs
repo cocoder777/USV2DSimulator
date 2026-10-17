@@ -68,17 +68,14 @@ public class BoatParameterPanel : MonoBehaviour
         var runner = GetComponent<SimulationRunner>();
         if (runner != null)
         {
-            GUILayout.Label("JEV ACTION PLAN", titleStyle);
+            GUILayout.Label("JEV CONTROL", titleStyle);
             bool enabled = GUI.enabled;
             GUI.enabled = enabled && !runner.JevStarted;
-            GUILayout.Label($"Actions per request: {runner.actionCount}", labelStyle);
-            int count = Mathf.RoundToInt(GUILayout.HorizontalSlider(runner.actionCount, 1, 10));
             float duration = Mathf.Round(DrawSlider("Action duration", runner.actionDuration,
                 Time.fixedDeltaTime, 2f, "s") / Time.fixedDeltaTime) * Time.fixedDeltaTime;
-            if (!runner.JevStarted) { runner.actionCount = count; runner.actionDuration = duration; }
+            if (!runner.JevStarted) runner.actionDuration = duration;
             GUI.enabled = enabled;
-            GUILayout.Label($"Decision period: {runner.DecisionPeriod:F2} simulation s", labelStyle);
-            GUILayout.Label("Set before starting. Reset to change the plan.", hintStyle);
+            GUILayout.Label("Set duration before starting. Reset to change it.", hintStyle);
             if (boat.Mode == BoatDynamics2D.ControlMode.Jev && !runner.JevStarted
                 && GUILayout.Button("Start Jev", GUILayout.Height(28))) runner.StartJev();
             GUILayout.Space(8);
@@ -115,19 +112,9 @@ public class BoatParameterPanel : MonoBehaviour
             boat.maxAcceleration, 0.1f, 5f, "m/s^2"
         );
 
-        boat.accelerationTimeConstant = DrawSlider(
-            "Acceleration response",
-            boat.accelerationTimeConstant, 0f, 2f, "s"
-        );
-
         boat.maxAngularAccelerationDeg = DrawSlider(
             "Max angular acceleration",
             boat.maxAngularAccelerationDeg, 5f, 180f, "deg/s^2"
-        );
-
-        boat.angularAccelerationTimeConstant = DrawSlider(
-            "Angular response",
-            boat.angularAccelerationTimeConstant, 0f, 2f, "s"
         );
 
         boat.maxYawRateDeg = DrawSlider(
@@ -217,8 +204,8 @@ public class BoatParameterPanel : MonoBehaviour
         boat.maxAngularAccelerationDeg = 60f;
         boat.maxYawRateDeg = 45f;
 
-        boat.accelerationTimeConstant = 0.25f;
-        boat.angularAccelerationTimeConstant = 0.25f;
+        boat.accelerationTimeConstant = 0f;
+        boat.angularAccelerationTimeConstant = 0f;
 
         boat.linearDamping = 0.2f;
         boat.angularDamping = 1.2f;

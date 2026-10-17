@@ -46,9 +46,11 @@ cd USV2DSimulator
 
 ### 3. Jev 控制
 
-按 [Jev API 调用说明](docs/bian/当前控制与Jev协议.md) 配置 key，并启动 Python 客户端。
+按 [Jev API 调用说明](docs/bian/当前控制与Jev协议.md) ，使用`python jev_api/boat_client.py`启动 Python 客户端。
 
 在右侧 `JEV ACTION PLAN` 中设置动作数量（1～10）和单动作持续时间，切换到 Jev 模式，点击 **`Start Jev`**。开始后这两个参数锁定；按 R 重置后可以重新调整。初始配置为 1 个动作、每个持续 0.4 秒。
+
+每个动作通过两道 Score 决定线加速度和角加速度档位。Jev 仅接收全局坐标下的船状态、当前目标、动力学参数和动作配置；参考路线只用于显示和轨迹对比。多动作问题独立求值，整批按序执行。
 
 等待回答时仿真暂停，界面仍可操作。调用失败时点击 `Retry Jev`，或切回 Manual。
 
@@ -56,7 +58,7 @@ cd USV2DSimulator
 
 右侧 `MAP LEVEL` 可选择 **Level 0～4**，包含基础路线、交替弯道、折返和密集交叉路线。切换地图会重置小船及任务；`Reload task` 重新加载当前地图。
 
-沿参考路线按序通过任务点；中间点不要求停车，终点需要同时满足距离和速度要求。完成任务后，本局仿真暂停。
+按序通过任务点；中间点不要求停车，终点需要同时满足距离和速度要求。参考路线供监控和轨迹对比查看。完成任务后，本局仿真暂停。
 
 地图数据位于 `Assets/StreamingAssets/fixed_route.json` 和 `Assets/StreamingAssets/Maps/`，Editor 与独立程序均从这里加载。
 

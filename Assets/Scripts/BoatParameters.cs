@@ -18,7 +18,7 @@ public sealed class BoatParameters
     };
 }
 
-// Shared numerical plant for actual execution and single-axis input forecasts.
+// Numerical plant used by actual execution.
 public static class BoatScalarDynamics
 {
     public static (float value, float actuator) Step(float value, float actuator, float command,
@@ -28,12 +28,5 @@ public static class BoatScalarDynamics
         actuator += (command - actuator) * blend;
         value = UnityEngine.Mathf.Clamp(value + (actuator - damping * value) * dt, minimum, maximum);
         return (value, actuator);
-    }
-    public static float Predict(float value, float actuator, float command, float timeConstant,
-        float damping, float dt, int steps, float minimum, float maximum)
-    {
-        for (int i = 0; i < steps; i++)
-            (value, actuator) = Step(value, actuator, command, timeConstant, damping, dt, minimum, maximum);
-        return value;
     }
 }

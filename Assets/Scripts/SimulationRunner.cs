@@ -87,7 +87,7 @@ public sealed class SimulationRunner : MonoBehaviour
             if (requestedCount < 1 || requestedCount > 10) throw new ArgumentException("Expected 1..10 actions per decision.");
             requestedDuration = actionDuration; requestTick = boat.Tick;
             identity = Identity(); parameters = Parameters(); DecisionId = Guid.NewGuid().ToString("N");
-            var observation = ObservationBuilder.ForModel(boat, mission, Time.fixedDeltaTime, requestedCount, requestedDuration);
+            var observation = ObservationBuilder.ForModel(boat, mission, requestedCount, requestedDuration);
             var packet = Envelope("decision_request"); packet["observation"] = observation;
             bridge.SetDecisionRequest(packet.ToString(Newtonsoft.Json.Formatting.None));
             State = RunState.Waiting;

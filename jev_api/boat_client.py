@@ -46,91 +46,86 @@ def valid_request(packet):
 
 
 ACCEL_LABELS = (
-    "Strong negative acceleration; rapidly brake forward motion, or build reverse speed.",
-    "Medium negative acceleration; clearly reduce forward speed.",
-    "Mild negative acceleration; gently reduce forward speed.",
-    "No longitudinal acceleration input; coast with actuator lag and drag.",
-    "Small positive acceleration; gently increase forward speed or compensate drag.",
-    "Medium positive acceleration; build forward speed.",
-    "Large positive acceleration; increase forward speed quickly.",
-    "Maximum positive acceleration; strongest forward speed increase.",
+    "Maximum negative input; strongest reduction of signed speed.",
+    "Medium negative input; clear reduction of signed speed.",
+    "Mild negative input; gentle reduction of signed speed.",
+    "Zero input; speed changes under actuator lag and drag.",
+    "Small positive input; gentle increase of signed speed.",
+    "Medium positive input; clear increase of signed speed.",
+    "Large positive input; rapid increase of signed speed.",
+    "Maximum positive input; strongest increase of signed speed.",
 )
 TURN_LABELS = (
-    "Strong clockwise/right angular acceleration; build negative yaw rate or brake positive yaw rate strongly.",
-    "Medium clockwise/right angular acceleration; increase rightward rotation or reduce leftward rotation.",
-    "Mild clockwise/right angular acceleration; small adjustment toward rightward rotation.",
-    "No angular acceleration input; yaw rate continues under actuator lag and damping.",
-    "Mild counterclockwise/left angular acceleration; small adjustment toward leftward rotation.",
-    "Medium counterclockwise/left angular acceleration; increase leftward rotation or reduce rightward rotation.",
-    "Strong counterclockwise/left angular acceleration; build positive yaw rate or brake negative yaw rate strongly.",
+    "Maximum clockwise input; strongly decrease signed yaw rate.",
+    "Medium clockwise input; clearly decrease signed yaw rate.",
+    "Mild clockwise input; gently decrease signed yaw rate.",
+    "Zero input; rotation changes under actuator lag and damping.",
+    "Mild counterclockwise input; gently increase signed yaw rate.",
+    "Medium counterclockwise input; clearly increase signed yaw rate.",
+    "Maximum counterclockwise input; strongly increase signed yaw rate.",
 )
+MODEL_STATE_FIELDS = ("coordinates", "planning", "boat", "target", "dynamics", "motion")
+
+
+def make_instructions(axis, index, count, duration):
+    command = {"acceleration": "longitudinal acceleration", "turn": "angular acceleration"}[axis]
+    if count == 1:
+        timing = (f"for the next {duration:.6g} seconds? "
+                  "The supplied boat state is the state at the start of this interval.")
+    else:
+        begin, end = index * duration, (index + 1) * duration
+        timing = (f"for action {index + 1} of {count}, during [{begin:.6g}, {end:.6g}) seconds "
+                  "after simulation resumes? The supplied boat state is measured at time zero. "
+                  "No updated state is supplied for later intervals. All actions are requested together "
+                  "and executed in order without intermediate feedback.")
+    return f"What signed {command} command is appropriate to reach the current target " + timing
 
 
 def build_payload(observation, model="jev-latest"):
-    state = copy.deepcopy(observation)
-    planning = state["planning"]
-    fractions = state["actions"]
-    dyn = state["dynamics"]
-    criteria_a = [label + f" Input is {float(f) * dyn['max_acceleration']:.4g} m/s^2."
+    state = {field: copy.deepcopy(observation[field]) for field in MODEL_STATE_FIELDS}
+    planning, dyn = state["planning"], state["dynamics"]
+    fractions = observation["actions"]
+    criteria_a = [label + f" Command: {float(f) * dyn['max_acceleration']:.4g} m/s^2."
                   for label, f in zip(ACCEL_LABELS, fractions["acceleration_fractions"])]
-    criteria_t = [label + f" Input is {float(f) * dyn['max_angular_acceleration_deg']:.4g} deg/s^2."
+    criteria_t = [label + f" Command: {float(f) * dyn['max_angular_acceleration_deg']:.4g} deg/s^2."
                   for label, f in zip(TURN_LABELS, fractions["turn_fractions"])]
-    state["objective"] = ("Follow the reference path forward, visit mission targets in order, "
-                          "maintain cruise speed, and stop inside the end radius. "
-                          "Choose acceleration INPUTS, not velocity, position or heading. "
-                          "Turning right can be needed to stop an existing leftward yaw rate.")
-    state["control_guidance"] = (
-        "Navigation supplies speed and yaw-rate TRACKING GOALS. Each axis has independent physical forecasts. "
-        "Select the input with the SMALLEST tracking_error for that axis. "
-        "tracking_error already includes current actuator inertia and damping. Smaller is better. "
-        "Do not choose by the input sign alone: an opposite angular input can reduce excessive existing yaw rate. "
-        "Do not choose an input merely because its absolute magnitude is small. Compare the predicted goal errors.")
-    state["plan_instructions"] = (
-        f"Plan {planning['action_count']} ordered paired actions in this single request. "
-        f"Each action lasts {planning['action_duration_s']:.6g} simulation seconds. "
-        "Each interval has one longitudinal acceleration question and one angular acceleration question. "
-        "All answers are collected before simulation resumes; intervals execute consecutively in index order.")
+    state["task"] = (
+        "Navigate the boat to the current target using global XY coordinates. "
+        "For a pass-through target, enter its arrival radius. "
+        "For a stop target, be inside its arrival radius with absolute speed at or below the stop threshold. "
+        "The target.requires_stop field specifies which rule applies. "
+        "Commands are signed longitudinal acceleration and angular acceleration. "
+        "Positive longitudinal acceleration increases signed speed; positive angular acceleration acts counterclockwise. "
+        "Zero command does not immediately stop motion. "
+        "Account for current velocity, rotation, actuator lag and damping.")
     questions = {}
-    forecasts_by_axis = state.pop("input_forecasts", None)
-    if forecasts_by_axis:
-        state["forecast_horizon_s"] = forecasts_by_axis["horizon_s"]
     for i in range(planning["action_count"]):
-        begin = i * planning["action_duration_s"]
-        end = begin + planning["action_duration_s"]
-        context = (f"Action {i + 1} of {planning['action_count']}; duration {planning['action_duration_s']:.6g} s. "
-                   f"Plan input for interval [{begin:.3f}, {end:.3f}) simulation seconds after resuming from this frozen state. "
-                   "Account for prior intervals, inertia, damping and the mission goals. ")
-        for name, criteria, instructions in (
-            ("acceleration", criteria_a, "How much signed longitudinal acceleration input is appropriate?"),
-            ("turn", criteria_t, "How much signed angular acceleration input is appropriate?"),
-        ):
-            if forecasts_by_axis:
-                forecasts = forecasts_by_axis[name]
-                criteria = [{"meaning": c, "physical_prediction": p} for c, p in zip(criteria, forecasts)]
-                instructions = ("Which input has the SMALLEST physical_prediction.tracking_error on this axis? "
-                                "Select the closest predicted tracking result; all inputs are allowed.")
-            questions[f"{name}_{i}"] = {
-                "type": "choice", "instructions": context + instructions,
-                "criteria": {str(j): c for j, c in enumerate(criteria)},
+        for axis, criteria in (("acceleration", criteria_a), ("turn", criteria_t)):
+            questions[f"{axis}_{i}"] = {
+                "type": "score",
+                "instructions": make_instructions(axis, i, planning["action_count"], planning["action_duration_s"]),
+                "criteria": criteria,
             }
     return {"model": model, "state": state, "questions": questions}
 
 
 def decode_actions(response, count):
     answers = response.get("answers")
-    if not isinstance(answers, dict) or len(answers) != 2 * count:
-        raise ValueError("Expected exactly two answers per action")
+    expected = {f"{axis}_{i}" for i in range(count) for axis in ("acceleration", "turn")}
+    if not isinstance(answers, dict) or set(answers) != expected:
+        raise ValueError("Expected exactly two matching answers per action")
     actions = []
     for i in range(count):
         action = {}
         for name, maximum in (("acceleration", 7), ("turn", 6)):
-            answer = answers.get(f"{name}_{i}")
-            if not isinstance(answer, dict) or answer.get("type") != "choice":
+            answer = answers[f"{name}_{i}"]
+            if not isinstance(answer, dict) or answer.get("type") != "score":
                 raise ValueError(f"Missing or wrong answer type for {name}_{i}")
-            choice = answer.get("choice")
-            if not isinstance(choice, str) or choice not in tuple(str(n) for n in range(maximum + 1)):
-                raise ValueError("Unknown choice")
-            action[name + "_index"] = int(choice)
+            score = answer.get("score")
+            if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= maximum:
+                raise ValueError(f"Invalid score for {name}_{i}")
+            # Nearest level, with exact half-levels rounded upward; keep Unity's discrete wire contract.
+            action[name + "_index"] = math.floor(score + 0.5)
         actions.append(action)
     return actions
 

@@ -16,7 +16,6 @@
     "speed": 0.0,
     "yaw_rate_deg": 0.0
   },
-  "cruise_speed_mps": 1.5,
   "arrival_radius_m": 1.0,
   "stop_speed_mps": 0.1,
   "waypoints": [

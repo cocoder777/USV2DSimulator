@@ -15,7 +15,6 @@ public sealed class TargetRouteData
     [DataMember(IsRequired = true)] public RoutePoint[] waypoints;
     [DataMember] public CurvePath path;
     [DataMember] public InitialState initial_state;
-    [DataMember] public float cruise_speed_mps;
     [DataMember] public float arrival_radius_m;
     [DataMember] public float stop_speed_mps;
 
@@ -112,13 +111,12 @@ public sealed class TargetRouteData
                 if (route.initial_state == null) route.initial_state = new InitialState {
                     x = route.waypoints[0].x, y = route.waypoints[0].y };
                 if (route.arrival_radius_m == 0) route.arrival_radius_m = 1;
-                if (route.cruise_speed_mps == 0) route.cruise_speed_mps = 1.5f;
                 if (route.stop_speed_mps == 0) route.stop_speed_mps = 0.1f;
             }
             else
             {
                 var document = Newtonsoft.Json.Linq.JObject.Parse(json);
-                foreach (string field in new[] { "initial_state", "cruise_speed_mps", "arrival_radius_m", "stop_speed_mps" })
+                foreach (string field in new[] { "initial_state", "arrival_radius_m", "stop_speed_mps" })
                     if (document[field] == null || document[field].Type == Newtonsoft.Json.Linq.JTokenType.Null)
                         throw new FormatException("Missing task field: " + field);
                 route.ValidateCurve();
@@ -134,10 +132,9 @@ public sealed class TargetRouteData
     {
         if (initial_state == null || !Finite(initial_state.x) || !Finite(initial_state.y)
             || !Finite(initial_state.heading_deg) || !Finite(initial_state.speed) || !Finite(initial_state.yaw_rate_deg)
-            || !Finite(cruise_speed_mps) || cruise_speed_mps <= 0
             || !Finite(arrival_radius_m) || arrival_radius_m <= 0
             || !Finite(stop_speed_mps) || stop_speed_mps < 0)
-            throw new FormatException("Task initial state must be finite; cruise speed/radius positive and stop speed nonnegative.");
+            throw new FormatException("Task initial state must be finite; radius positive and stop speed nonnegative.");
         double dx = initial_state.x - waypoints[0].x, dy = initial_state.y - waypoints[0].y;
         if (dx * dx + dy * dy > (double)arrival_radius_m * arrival_radius_m)
             throw new FormatException("Initial position must be inside the start arrival region.");

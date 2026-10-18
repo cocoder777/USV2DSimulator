@@ -108,6 +108,14 @@ UDP 重发、缓存和确认机制保持原逻辑。API 失败时使用 `Retry J
 
 `--log` 记录原始 UDP `request`、实际 HTTP `payload`、`raw_response`、单动作 `result` 及 API 耗时。状态广播保留 `action_duration_s`；每条决策只对应一个动作。
 
+客户端默认复用 HTTPS 连接及 SSLContext，保留系统/环境 HTTP 代理和证书校验，不自动重试 POST。连接失效会返回错误，使用现有 `Retry Jev` 流程；需使用原传输方式时加 `--http-transport urllib`。不支持复用的代理配置自动使用 urllib。UDP 结果检查间隔从 50 ms 调整为 10 ms，这部分不计入 HTTP 耗时。
+
+每条决策的 `timings` 包含构造请求、JSON 序列化、SSL 环境初始化、本地 DNS/TCP、代理 CONNECT、TLS、发送、等待响应头、读取正文、JSON 解析及动作解码耗时，并记录 `connection_reused`、正文长度和 SHA-256。复用时没有发生的建连阶段不重复计时；`api_total_s` 不包含构造 payload、动作解码、日志写入和 UDP/Unity 等待。urllib 模式的 `wait_headers_s` 同时包含发送请求的时间。
+
+经过代理时，DNS/TCP 是连接本地代理的耗时；TLS 区间可能包含代理上游建连和远端 DNS，不能单独认定为纯 TLS 运算。`wait_headers_s` 包含网络往返、服务端排队和推理，接口未提供 `Server-Timing` 时不能进一步拆分。`open_s` 是 urllib 的重叠总量，不能与各阶段相加。
+
+客户端无需新增 Python 依赖。耗时对照结果与原始数据位置见实验记录；本次新增的辅助测评脚本已在实验后删除。
+
 离线协议测试：
 
 ```powershell

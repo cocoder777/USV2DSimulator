@@ -6,8 +6,9 @@ import json
 import math
 import socket
 import time
-import urllib.error
-import urllib.request
+import threading
+
+from http_transport import JevTransport
 
 from choice_control import ACTION_CHOICES, MODEL_STATE_FIELDS, build_payload, decode_action, make_instructions
 
@@ -47,14 +48,18 @@ def valid_request(packet):
 
 
 
-def call_api(payload, key, endpoint):
-    request = urllib.request.Request(endpoint, data=dumps(payload).encode("utf-8"), method="POST",
-                                     headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=None) as response:  # Deliberately no decision timeout.
-            return json.load(response)
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"Jev returned HTTP {error.code}") from None
+_worker = threading.local()
+
+
+def call_api(payload, key, endpoint, timings=None, transport="persistent"):
+    if not hasattr(_worker, "http"):
+        _worker.http = JevTransport()
+    return _worker.http.call(payload, key, endpoint, timings, transport)
+
+
+def close_api():
+    if hasattr(_worker, "http"):
+        _worker.http.close()
 
 
 def decide(packet, settings, key, log):
@@ -62,10 +67,15 @@ def decide(packet, settings, key, log):
     envelope = {k: packet[k] for k in IDENTITY_FIELDS}
     envelope["version"] = PROTOCOL_VERSION
     payload = None
+    timings = {}
     try:
         payload = build_payload(packet["observation"], settings.model)
-        raw = call_api(payload, key, settings.endpoint)
+        timings["build_payload_s"] = time.monotonic() - started
+        raw = call_api(payload, key, settings.endpoint, timings,
+                       getattr(settings, "http_transport", "persistent"))
+        decode_started = time.monotonic()
         action = decode_action(raw)
+        timings["decode_action_s"] = time.monotonic() - decode_started
         result = dict(envelope, type="decision_result", action=action,
                       action_duration_s=packet["observation"]["planning"]["action_duration_s"])
     except Exception as error:
@@ -73,7 +83,7 @@ def decide(packet, settings, key, log):
         result = dict(envelope, type="decision_error", error=f"{type(error).__name__}: {error}")
     if log:
         log.write(dumps({"event": "decision", "elapsed_s": time.monotonic() - started,
-                         "request": packet, "payload": payload, "raw_response": raw, "result": result}) + "\n")
+                         "timings": timings, "request": packet, "payload": payload, "raw_response": raw, "result": result}) + "\n")
         log.flush()
     print(dumps({"event": result["type"], "tick": packet["tick"], "action": result.get("action"),
                  "error": result.get("error"), "elapsed_s": round(time.monotonic() - started, 3)}), flush=True)
@@ -97,7 +107,7 @@ def serve(settings):
             sock.bind((settings.listen_host, settings.listen_port))
             if hasattr(socket, "SIO_UDP_CONNRESET"):
                 sock.ioctl(socket.SIO_UDP_CONNRESET, False)
-            sock.settimeout(0.05)
+            sock.settimeout(0.01)
             print(f"Jev worker listening on {settings.listen_host}:{settings.listen_port}; Unity={endpoint}", flush=True)
             while True:
                 if future is not None and future.done():
@@ -158,6 +168,7 @@ def serve(settings):
                 else:
                     queued = packet
     finally:
+        pool.submit(close_api).result()
         pool.shutdown(wait=True)
         if log:
             log.close()
@@ -171,6 +182,8 @@ def main():
     parser.add_argument("--listen-port", type=int, default=5006)
     parser.add_argument("--model", default="jev-latest")
     parser.add_argument("--endpoint", default="https://api.typesafe.ai/v1/systemone")
+    parser.add_argument("--http-transport", choices=("persistent", "urllib"), default="persistent",
+                        help="Reuse HTTPS connections (default), or use the original urllib transport")
     parser.add_argument("--log")
     parser.add_argument("--exit-on-complete", action="store_true")
     settings = parser.parse_args()

@@ -145,7 +145,9 @@ def make_instructions(duration, requires_stop):
             "best achieves this target's completion condition " + timing)
 
 
-def build_payload(observation, model="jev-latest"):
+def build_payload(observation, model="jev-latest", profile="original"):
+    if profile not in ("original", "compact"):
+        raise ValueError("Unknown prompt profile")
     state = {field: copy.deepcopy(observation[field]) for field in MODEL_STATE_FIELDS}
     boat, target = state["boat"], state["target"]
     x, y = boat.pop("position_xy_m")
@@ -164,16 +166,29 @@ def build_payload(observation, model="jev-latest"):
         a, t = action["acceleration_index"], action["turn_index"]
         linear = fractions["acceleration_fractions"][a] * dyn["max_acceleration"]
         angular = fractions["turn_fractions"][t] * dyn["max_angular_acceleration_deg"]
-        criteria[key] = (
+        criteria[key] = (f"a={linear:.4g} m/s^2; alpha={angular:.4g} deg/s^2." if profile == "compact" else (
             f"LONGITUDINAL situation: {LINEAR_SITUATIONS[a]} "
             f"ANGULAR situation: {TURN_SITUATIONS[t]} "
             f"Commands: longitudinal {linear:.4g} m/s^2; angular {angular:.4g} deg/s^2. "
-            "Both situations must fit.")
+            "Both situations must fit."))
     planning = state["planning"]
+    instructions = make_instructions(planning["action_duration_s"], requires_stop)
+    if profile == "compact":
+        state["coordinates"] = "Boat frame: +forward ahead, +left left; metres. Positive yaw is counterclockwise."
+        goal = ("Final target: enter arrival_radius_m with abs(speed_mps)<=stop_speed_mps. Brake before overshoot; "
+                "the stop speed applies only inside the circle." if requires_stop else
+                "Checkpoint: enter arrival_radius_m; stopping is not required.")
+        instructions = (
+            f"{goal} Choose one acceleration pair for the next {planning['action_duration_s']:.6g} seconds. "
+            "Approach the current stationary target, preferably forward. Speed is signed: positive forward, negative backward. "
+            "a increases signed speed: negative a brakes forward travel but accelerates reverse travel; positive a arrests reverse travel. "
+            "alpha increases counterclockwise yaw rate: positive turns left, negative right. Yaw rate changes heading over time. "
+            "Turn toward the target and brake rotation before alignment. Account for current speed, yaw, damping and stopping distance. "
+            "Commands are accelerations, not target velocities; they take effect immediately. Units: metres, seconds, degrees.")
     questions = {
         "action_0": {
             "type": "choice",
-            "instructions": make_instructions(planning["action_duration_s"], requires_stop),
+            "instructions": instructions,
             "criteria": dict(criteria),
         }
     }

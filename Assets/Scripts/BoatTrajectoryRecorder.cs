@@ -87,7 +87,14 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
         if (mission.Progress.Completed) ExportCompletedRun();
     }
 
-    private void ExportCompletedRun()
+    public void ExportComparisonRun(string backend, string reason)
+    {
+        if (!exported && recordedRoute != null && samples.Count > 1) ExportRun(reason, backend);
+    }
+
+    private void ExportCompletedRun() => ExportRun("completed", GetComponent<LocalModelSwitcher>()?.ActiveBackend);
+
+    private void ExportRun(string result, string backend)
     {
         exported = true; // Exactly once per episode, including a failed disk write.
         ExportError = null;
@@ -101,7 +108,8 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
             Directory.CreateDirectory(directory);
             string name = "trajectory_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + "Z_" + episode;
             string data = Path.Combine(directory, name + ".json");
-            var document = new { schema_version = 1, result = "completed", episode_id = episode,
+            var document = new { schema_version = 1, result, controller = backend ?? "external", episode_id = episode,
+                worker_log = GetComponent<LocalModelSwitcher>()?.WorkerLogPath,
                 map_level = RecordedMapLevel(),
                 route = recordedRoute, samples, simulation_time = boat.SimulationTime,
                 final_speed_mps = boat.Speed, passed_count = mission.Progress.NextIndex };

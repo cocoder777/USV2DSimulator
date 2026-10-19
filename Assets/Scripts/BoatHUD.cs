@@ -16,9 +16,11 @@ public class BoatHUD : MonoBehaviour
         string connection = bridge == null ? "Unavailable" : bridge.CommunicationStatus;
         var mission = boat.GetComponent<MissionManager>();
         var decision = boat.GetComponent<SimulationRunner>();
+        var model = boat.GetComponent<LocalModelSwitcher>();
         statusText.text =
             "USV 2D SIMULATOR\n" +
             $"Mode: {boat.Mode}\nUDP: {connection}\n" +
+            $"Model: {model?.ActiveModelName ?? "external / not selected"}\n" +
             $"Task: {mission?.Status ?? "NoTask"}  Next: {mission?.Progress?.Next?.id ?? "--"}\n" +
             $"Decision: {decision?.Status ?? "--"}\n" +
             $"Action duration: {decision?.actionDuration:F2} s\n" +

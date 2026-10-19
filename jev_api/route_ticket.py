@@ -1,18 +1,22 @@
 """TypeSafe 官方 quickstart：一次请求回答三种题型。"""
 
+import os
+
 from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
 
 
 # 换成自己的官方 TypeSafe API key 即可运行。
-API_KEY = "apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141"
 
 
 def main():
+    api_key = os.environ.get("JEV_API_KEY", "").strip()
+    if not api_key:
+        raise SystemExit("Set JEV_API_KEY before running this cloud example.")
     # state：待判断的材料，沿用官方示例的客服工单。
     ticket = "Our API integration started returning 500 errors on every request about 20 minutes ago, and we can't process any customer orders until this is fixed."
 
     with TypeSafeClient(
-        api_key=API_KEY,
+        api_key=api_key,
         base_url="https://api.typesafe.ai",
         model="jev-latest",
         timeout=30.0,

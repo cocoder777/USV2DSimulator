@@ -1,0 +1,22 @@
+$DeploymentRoot = $PSScriptRoot
+$env:UV_PYTHON_INSTALL_DIR = "$DeploymentRoot\python"
+$env:UV_PYTHON_BIN_DIR = "$DeploymentRoot\tools"
+$env:UV_CACHE_DIR = "$DeploymentRoot\cache\uv"
+$env:HF_HOME = "$DeploymentRoot\models"
+$env:HF_HUB_CACHE = "$DeploymentRoot\models\hub"
+$env:TORCH_HOME = "$DeploymentRoot\cache\torch"
+$env:TEMP = "$DeploymentRoot\tmp"
+$env:TMP = $env:TEMP
+$env:PYTHONUTF8 = '1'
+$env:PYTHONUNBUFFERED = '1'
+$env:HF_HUB_DISABLE_SYMLINKS_WARNING = '1'
+$env:KEV_BACKEND = 'torch'
+$env:KEV_DTYPE = 'bf16'
+$env:KEV_ATTN = 'sdpa'
+$env:KEV_CUDA_GRAPHS = '0'
+$env:KEV_FUSED = '0'
+$env:KEV_PREFIX_CACHE = '1'
+$env:KEV_TRUNCATE_STATES = '0'
+$env:HF_HUB_OFFLINE = '1'
+$env:TRANSFORMERS_OFFLINE = '1'
+Remove-Item Env:KEV_API_KEY -ErrorAction SilentlyContinue

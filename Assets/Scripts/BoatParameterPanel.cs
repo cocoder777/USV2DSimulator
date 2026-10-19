@@ -5,6 +5,7 @@ public class BoatParameterPanel : MonoBehaviour
 {
     private BoatDynamics2D boat;
     private MissionManager mission;
+    private LocalModelSwitcher modelSwitcher;
     private Vector2 scrollPosition;
     private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
     private static readonly string[] mapDescriptions = {
@@ -25,6 +26,8 @@ public class BoatParameterPanel : MonoBehaviour
     {
         boat = GetComponent<BoatDynamics2D>();
         mission = GetComponent<MissionManager>();
+        modelSwitcher = GetComponent<LocalModelSwitcher>();
+        if (modelSwitcher == null) modelSwitcher = gameObject.AddComponent<LocalModelSwitcher>();
     }
 
     void OnGUI()
@@ -51,6 +54,9 @@ public class BoatParameterPanel : MonoBehaviour
 
         InitializeStyles();
 
+        bool wasEnabled = GUI.enabled;
+        GUI.enabled = wasEnabled && !modelSwitcher.IsSwitching;
+
         if (mission != null)
         {
             GUILayout.Label("MAP LEVEL", titleStyle);
@@ -65,6 +71,24 @@ public class BoatParameterPanel : MonoBehaviour
         }
 
         scrollPosition = GUILayout.BeginScrollView(scrollPosition);
+        GUILayout.Label("MODEL", titleStyle);
+        GUI.enabled = wasEnabled && !modelSwitcher.IsSwitching;
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Run Jev", GUILayout.Height(30))) modelSwitcher.SelectModel("cloud");
+        if (GUILayout.Button("Run Laya", GUILayout.Height(30))) modelSwitcher.SelectModel("laya");
+        if (GUILayout.Button("Run Kev", GUILayout.Height(30))) modelSwitcher.SelectModel("kev");
+        GUILayout.EndHorizontal();
+        GUI.enabled = wasEnabled && modelSwitcher.IsReady && !modelSwitcher.IsSwitching;
+        if (GUILayout.Button("Restart same model", GUILayout.Height(24))) modelSwitcher.RestartRun();
+        GUI.enabled = wasEnabled;
+        GUILayout.Label("Model: " + (modelSwitcher.ActiveModelName ?? "not selected"), labelStyle);
+        GUILayout.Label($"Sim: {boat.SimulationTime:F2} s   Passed: {mission?.Progress?.NextIndex ?? 0}/{mission?.Route?.waypoints.Length ?? 0}", labelStyle);
+        GUILayout.Label(modelSwitcher.Status, hintStyle);
+        if (modelSwitcher.LastDecisionSeconds >= 0)
+            GUILayout.Label($"Last decision: {modelSwitcher.LastDecisionSeconds:F3} s  Action: {modelSwitcher.LastAction}", hintStyle);
+        GUILayout.Label("Saves previous run; resets this map and runs selected model.", hintStyle);
+        GUILayout.Space(6);
+        GUI.enabled = wasEnabled && !modelSwitcher.IsSwitching;
         var runner = GetComponent<SimulationRunner>();
         if (runner != null)
         {
@@ -77,7 +101,9 @@ public class BoatParameterPanel : MonoBehaviour
             GUI.enabled = enabled;
             GUILayout.Label("Set duration before starting. Reset to change it.", hintStyle);
             if (boat.Mode == BoatDynamics2D.ControlMode.Jev && !runner.JevStarted
-                && GUILayout.Button("Start Jev", GUILayout.Height(28))) runner.StartJev();
+                && GUILayout.Button("Start Jev (cloud / original)", GUILayout.Height(28))) modelSwitcher.SelectModel("cloud");
+            if (boat.Mode == BoatDynamics2D.ControlMode.Jev && !runner.JevStarted
+                && GUILayout.Button("Start selected / external client", GUILayout.Height(24))) runner.StartJev();
             GUILayout.Space(8);
         }
         var trajectory = GetComponent<BoatTrajectoryRecorder>();
@@ -153,6 +179,7 @@ public class BoatParameterPanel : MonoBehaviour
         );
 
         GUILayout.EndScrollView();
+        GUI.enabled = wasEnabled;
         GUILayout.EndArea();
     }
 

@@ -38,7 +38,9 @@ def plot_run(document, output):
         ax.set_ylabel("World Y (m)")
         level = document.get("map_level")
         name = f"Level {level}" if level is not None else route["route_id"]
-        ax.set_title(f"{name}: reference and actual trajectory")
+        controller = document.get("controller")
+        suffix = f" [{controller}]" if controller else ""
+        ax.set_title(f"{name}{suffix}: reference and actual trajectory")
         ax.grid(True, color="0.9", linewidth=0.6)
         ax.legend(loc="upper left")
         fig.text(0.99, 0.01,

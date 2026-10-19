@@ -1,0 +1,20 @@
+{
+  "python": "3.12.15",
+  "torch_index": "https://download.pytorch.org/whl/cu128",
+  "laya": {
+    "directory": "Laya",
+    "source_url": "https://github.com/NandhaKishorM/laya.git",
+    "source_commit": "d74e8be46ef5241e4ba2b16cd25e896f24f71373",
+    "model_id": "convaiinnovations/laya-multilingual",
+    "revision": "1720e3e3357cfe1e281542e223f8273b0890ca34"
+  },
+  "kev": {
+    "directory": "Kev-0.8B",
+    "source_url": "https://github.com/jaredpalmer/kev.git",
+    "source_commit": "1f04cfa28e6a708485b28a9585010b9e436b776e",
+    "model_id": "jaredpalmer/kev-0.8b",
+    "revision": "bf75a6a8848ea6960ff2ed108d9ed44c2941174f",
+    "base_id": "Qwen/Qwen3.5-0.8B-Base",
+    "base_revision": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
+  }
+}

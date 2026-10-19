@@ -48,6 +48,8 @@ public sealed class SimulationRunner : MonoBehaviour
     }
     public void StartJev()
     {
+        var local = GetComponent<LocalModelSwitcher>();
+        if (local != null && (local.IsSwitching || (local.IsManaged && !local.IsReady))) return;
         if (boat.Mode != BoatDynamics2D.ControlMode.Jev || mission.Progress == null || mission.Progress.Completed) return;
         Invalidate(); JevStarted = true; Pump();
     }

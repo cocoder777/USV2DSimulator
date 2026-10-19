@@ -1,14 +1,16 @@
 # Jev 单动作调用协议
 
-每次决策只选择一个动作：Unity 暂停并提供最新状态，Python 请求 Jev，Unity 执行返回的线/角加速度组合，执行结束后再次暂停并请求下一次决策。默认每个动作持续 0.4 秒。
+每次决策只选择一个动作：Unity 暂停并提供最新状态，Python 请求所选决策模型，Unity 执行返回的线/角加速度组合，执行结束后再次暂停并请求下一次决策。默认每个动作持续 0.4 秒。
+
+客户端现在默认 `--backend laya`，连接本机 8010，模型名 `multilingual`，使用 compact 输入并保留全部 56 个动作。`--backend kev` 可切换至本机 8009 的 `kev-latest` 模型及 original 输入；`--backend cloud` 使用云端 Jev。本文下面的 HTTP 请求说明和示例对应 **cloud / original** 输入；Laya 另带 `max_len=4096`、`head_max_len=3072`，并拒绝状态、指令或选项截断。Unity UDP v5 及动作执行协议不变。启动及切换方法见项目 README。
 
 ## 1. 启动与接口
 
 ```powershell
-python jev_api/boat_client.py --log Logs/jev.jsonl
+python jev_api/boat_client.py --backend cloud --log Logs/jev.jsonl
 ```
 
-Unity Play 后选择 Jev 模式，在 `JEV CONTROL` 设置动作持续时间，点击 `Start Jev`。运行期间时长锁定，重置后可重新设置。等待 Jev 回答期间仿真暂停，界面继续响应。
+Unity Play 后可直接点击 `Run Jev` 或 `Start Jev (cloud / original)`，自动选择云端 Jev 并恢复 GitHub `42088e5` 的运行参数（0.4 秒动作、0.02 秒固定步长及原动力学配置），需配置 Windows 用户或进程环境变量 `JEV_API_KEY`。如果已手动启动上面的客户端，则选择 Jev 模式后点击 `Start selected / external client`，沿用该客户端和当前参数。运行期间时长锁定，重置后可重新设置。等待 Jev 回答期间仿真暂停，界面继续响应。
 
 ```text
 POST https://api.typesafe.ai/v1/systemone
@@ -16,7 +18,7 @@ Authorization: Bearer <API_KEY>
 Content-Type: application/json
 ```
 
-HTTP 请求顶层为 `model`、`state`、`questions`。默认模型 `jev-latest`，可用 `--model` 指定。客户端仅用 Python 标准库发起 HTTP 请求；Key 只进入请求头，不进入输入或日志。
+HTTP 请求顶层为 `model`、`state`、`questions`。云端后端默认模型 `jev-latest`，可用 `--model` 指定。客户端仅用 Python 标准库发起 HTTP 请求；云端 Key 从 `JEV_API_KEY` 环境变量读取，只进入请求头，不进入输入或日志。本机请求不携带云端密钥。
 
 官方资料：[API](https://docs.typesafe.ai/api)、[Choice](https://docs.typesafe.ai/primitives/choice)、[State](https://docs.typesafe.ai/concepts/state)。
 

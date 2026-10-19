@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import urllib.error
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -36,6 +37,76 @@ def response(key="positive_gentle__clockwise_gentle"):
 
 
 class ChoiceProtocolTests(unittest.TestCase):
+    def test_backend_defaults_and_explicit_overrides(self):
+        settings = client.parse_settings([])
+        self.assertEqual((settings.backend, settings.model, settings.prompt_profile), ("laya", "multilingual", "compact"))
+        self.assertEqual(settings.endpoint, "http://127.0.0.1:8010/v1/systemone")
+        settings = client.parse_settings(["--backend", "laya"])
+        self.assertEqual((settings.backend, settings.model, settings.prompt_profile), ("laya", "multilingual", "compact"))
+        for backend in ("kev", "cloud"):
+            settings = client.parse_settings(["--backend", backend])
+            self.assertEqual(settings.prompt_profile, "original")
+            self.assertEqual((settings.endpoint, settings.model), client.BACKENDS[backend][:2])
+        settings = client.parse_settings(["--backend", "kev", "--endpoint", "http://localhost:1234/custom", "--model", "custom", "--prompt-profile", "compact"])
+        self.assertEqual((settings.endpoint, settings.model, settings.prompt_profile), ("http://localhost:1234/custom", "custom", "compact"))
+
+    def test_compact_keeps_all_action_values_state_and_goal(self):
+        obs = observation()
+        original_obs = copy.deepcopy(obs)
+        compact = client.build_payload(obs, "multilingual", "compact")
+        legacy = client.build_payload(obs)
+        self.assertEqual(obs, original_obs)
+        for field in ("boat", "target", "dynamics", "planning", "motion"):
+            self.assertEqual(compact["state"][field], legacy["state"][field])
+        criteria = compact["questions"]["action_0"]["criteria"]
+        self.assertEqual(set(criteria), set(client.ACTION_CHOICES))
+        for key, action in client.ACTION_CHOICES.items():
+            a = obs["action_space"]["acceleration_fractions"][action["acceleration_index"]] * obs["dynamics"]["max_acceleration"]
+            alpha = obs["action_space"]["turn_fractions"][action["turn_index"]] * obs["dynamics"]["max_angular_acceleration_deg"]
+            self.assertEqual(criteria[key], f"a={a:.4g} m/s^2; alpha={alpha:.4g} deg/s^2.")
+        self.assertLess(len(json.dumps(compact)), len(json.dumps(legacy)) / 2)
+        self.assertIn("stop_speed_mps", compact["questions"]["action_0"]["instructions"])
+        obs["target"]["requires_stop"] = False
+        checkpoint = client.build_payload(obs, "multilingual", "compact")
+        self.assertNotIn("stop_speed_mps", checkpoint["state"]["target"])
+        self.assertIn("stopping is not required", checkpoint["questions"]["action_0"]["instructions"])
+
+    def test_laya_budget_and_metadata_logged_without_changing_udp(self):
+        settings = client.parse_settings(["--backend", "laya"])
+        raw = response()
+        raw["usage"] = {"input_tokens": 2000, "output_tokens": 0, "truncated": False}
+        log = io.StringIO()
+        with patch.object(client, "call_api", return_value=raw) as api, patch("builtins.print"):
+            result = client.decide(packet(), settings, None, log)
+        payload = api.call_args.args[0]
+        self.assertEqual((payload["max_len"], payload["head_max_len"]), (4096, 3072))
+        self.assertEqual(result["version"], 5)
+        self.assertEqual(result["action"], client.decode_action(raw))
+        record = json.loads(log.getvalue())
+        self.assertEqual((record["backend"], record["prompt_profile"]), ("laya", "compact"))
+        self.assertEqual(record["usage"], raw["usage"])
+
+    def test_local_endpoint_never_uses_cloud_credentials(self):
+        with patch.dict("os.environ", {"JEV_API_KEY": "cloud-secret"}):
+            for host in ("127.0.0.1", "localhost", "[::1]"):
+                self.assertIsNone(client.api_key_for_endpoint(f"http://{host}:8009/v1/systemone"))
+            self.assertEqual(client.api_key_for_endpoint("https://example.invalid/v1/systemone"), "cloud-secret")
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "JEV_API_KEY"):
+                client.api_key_for_endpoint("https://example.invalid/v1/systemone")
+        for endpoint in ("http://example.invalid", "file:///tmp/model", "http://user:password@localhost:8009"):
+            with self.assertRaises(ValueError):
+                client.api_key_for_endpoint(endpoint)
+        with patch.object(client.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b'{}'
+            client.call_api({}, "cloud-secret", "http://127.0.0.1:8009/v1/systemone")
+            self.assertIsNone(urlopen.call_args.args[0].get_header("Authorization"))
+
+    def test_unavailable_service_has_clear_error(self):
+        with patch.object(client.urllib.request, "urlopen", side_effect=urllib.error.URLError("connection refused")):
+            with self.assertRaisesRegex(RuntimeError, "Decision service unavailable"):
+                client.call_api({}, None, "http://127.0.0.1:8009/v1/systemone")
+
     def test_one_question_with_all_joint_options_and_current_duration(self):
         obs = observation()
         for duration in (.4, 1):

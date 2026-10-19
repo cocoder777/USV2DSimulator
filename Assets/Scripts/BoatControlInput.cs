@@ -27,9 +27,10 @@ public class BoatControlInput : MonoBehaviour
         var runner = GetComponent<SimulationRunner>();
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev && runner != null
             && GUI.Button(new Rect(22 + modeWidth + otherWidth, Screen.height - 45, otherWidth, 32),
-                runner.JevStarted ? "Retry Jev" : "Start Jev"))
+                "Run Jev (cloud)"))
         {
-            if (runner.JevStarted) runner.Retry(); else runner.StartJev();
+            var switcher = GetComponent<LocalModelSwitcher>();
+            if (switcher != null) switcher.SelectModel("cloud");
         }
     }
 

@@ -53,5 +53,21 @@ venv/
 .env.*
 !.env.example
 
+# Local tooling and generated model deployments (never commit weights or runtimes)
+.ruff_cache/
+/LocalModels/
+/Tools/LocalModels/**/.venv/
+/Tools/LocalModels/**/python/
+/Tools/LocalModels/**/models/
+/Tools/LocalModels/**/cache/
+/Tools/LocalModels/**/logs/
+/Tools/LocalModels/**/tmp/
+/Tools/LocalModels/**/source/
+/Tools/LocalModels/**/validation-project/
+/Tools/LocalModels/**/models.json
+/Tools/LocalModels/**/project.json
+/Tools/LocalModels/**/service-process.json
+/Tools/LocalModels/**/deployment-complete.json
+
 Agent.md
 /docs/bian/Jev仿真实验记录.md

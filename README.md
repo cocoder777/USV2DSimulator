@@ -29,7 +29,7 @@
 ### 1. 获取并打开项目
 
 ```powershell
-git clone --branch codex/kev-laya-integration https://github.com/cocoder777/USV2DSimulator.git
+git clone --branch kev-laya-integration https://github.com/cocoder777/USV2DSimulator.git
 cd USV2DSimulator
 ```
 

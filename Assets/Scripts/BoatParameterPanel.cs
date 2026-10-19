@@ -52,6 +52,8 @@ public class BoatParameterPanel : MonoBehaviour
 
         InitializeStyles();
 
+        scrollPosition = GUILayout.BeginScrollView(scrollPosition);
+
         if (mission != null)
         {
             GUILayout.Label("MAP LEVEL", titleStyle);
@@ -65,7 +67,6 @@ public class BoatParameterPanel : MonoBehaviour
             GUILayout.Space(8);
         }
 
-        scrollPosition = GUILayout.BeginScrollView(scrollPosition);
         var runner = GetComponent<SimulationRunner>();
         if (runner != null)
         {
@@ -129,6 +130,18 @@ public class BoatParameterPanel : MonoBehaviour
             "Max turning rate",
             boat.maxYawRateDeg, 5f, 120f, "deg/s"
         );
+
+        boat.accelerationTimeConstant = DrawSlider(
+            "Linear acceleration response",
+            boat.accelerationTimeConstant, 0f, 5f, "s"
+        );
+
+        boat.angularAccelerationTimeConstant = DrawSlider(
+            "Angular acceleration response",
+            boat.angularAccelerationTimeConstant, 0f, 5f, "s"
+        );
+
+        GUILayout.Label("Response is a time constant: larger values respond more slowly; 0 applies commands immediately.", hintStyle);
 
         boat.linearDamping = DrawSlider(
             "Linear damping",

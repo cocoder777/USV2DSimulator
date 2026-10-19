@@ -40,14 +40,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\LocalModels\setup.ps
 
 默认部署到 `D:\AI\Laya` 和 `D:\AI\Kev-0.8B`。**模型权重、虚拟环境和密钥不随仓库上传**，安装时下载固定版本；其他目录的配置见[使用指南](docs/Kev与Laya使用指南.md)。
 
+Kev / Laya 在本机运行，无需云端 Jev API 或密钥。
+
 进入 Play 后，在右侧 **MODEL** 选择：
 
 | 按钮 | 功能 |
 | --- | --- |
 | Run Laya | 启动本地 Laya-multilingual 控制 |
 | Run Kev | 启动本地 Kev-0.8B 控制 |
-| Run Jev | 调用云端 Jev，需自行配置 `JEV_API_KEY` |
+| Run Jev | 调用云端 Jev，自动读取已有密钥配置 |
 | Restart same model | 复用当前模型，从当前地图起点重跑 |
+
+Jev 按钮支持读取 `JEV_API_KEY` 环境变量或项目根目录的 `.env.jev.json`；已有配置时无需重复填写，换电脑后需自行配置。
 
 模型按钮自动管理服务和客户端。等待决策时仿真暂停，收到动作后继续执行；切换模型会保存上一轮轨迹并重置任务。
 

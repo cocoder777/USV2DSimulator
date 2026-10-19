@@ -82,79 +82,123 @@ class JevTransport:
             self.connection.close()
         self.connection = None
 
-    def call(self, payload, key, endpoint, metrics=None, mode="persistent"):
+    def prepare_connection(self, endpoint, metrics=None, mode="persistent"):
+        """提前完成建连，不发送决策 POST，也不需要 API key。"""
         metrics = metrics if metrics is not None else {}
         started = time.perf_counter()
-        mark = started
-        body = json.dumps(payload, ensure_ascii=False, allow_nan=False,
-                          separators=(",", ":")).encode("utf-8")
-        metrics.update(serialize_s=time.perf_counter() - mark,
-                       payload_bytes=len(body), payload_sha256=hashlib.sha256(body).hexdigest())
-        headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
         try:
             if mode == "urllib":
-                metrics.update(transport="urllib", connection_reused=False)
-                mark = time.perf_counter()
-                opener = urllib.request.build_opener(_MeasuredHandler(metrics))
-                metrics["proxy_setup_s"] = max(0.0, time.perf_counter() - mark - metrics["ssl_context_s"])
-                request = urllib.request.Request(endpoint, data=body, method="POST", headers=headers)
-                mark = time.perf_counter()
-                with opener.open(request, timeout=None) as response:
-                    metrics["open_s"] = time.perf_counter() - mark
-                    metrics["wait_headers_s"] = max(0.0, metrics["open_s"] - sum(
-                        metrics.get(k, 0) for k in ("connection_init_s", "dns_s", "tcp_s", "proxy_connect_s", "tls_s")))
-                    return self._read(response, metrics)
+                metrics.update(status="skipped", transport="urllib",
+                               reason="urllib does not retain a reusable connection")
+                return metrics
             if mode != "persistent":
                 raise ValueError("Unknown transport: " + mode)
-            mark = time.perf_counter()
-            url = urllib.parse.urlsplit(endpoint)
-            if url.scheme != "https" or not url.hostname or url.username or url.fragment:
-                raise ValueError("Expected an HTTPS endpoint without credentials or fragment")
-            proxy = None if urllib.request.proxy_bypass(url.hostname) else urllib.request.getproxies().get("https")
-            proxy_url = urllib.parse.urlsplit(proxy if "://" in (proxy or "") else "http://" + proxy) if proxy else None
-            if proxy_url and (proxy_url.scheme != "http" or proxy_url.username):
-                metrics["fallback_reason"] = "Proxy requires urllib transport"
-                return self.call(payload, key, endpoint, metrics, mode="urllib")
-            route = (endpoint, proxy)
-            metrics["proxy_setup_s"] = time.perf_counter() - mark
-            metrics.update(transport="persistent", via_proxy=bool(proxy),
-                           connection_reused=self.connection is not None and self.route == route and self.connection.sock is not None)
-            if not metrics["connection_reused"]:
+            route = self._resolve_route(endpoint, metrics)
+            if route is None:
                 self.close()
-                mark = time.perf_counter()
-                if self.context is None:
-                    self.context = ssl.create_default_context()
-                metrics["ssl_context_s"] = time.perf_counter() - mark
-                self.connection = MeasuredHTTPSConnection(
-                    proxy_url.hostname if proxy_url else url.hostname,
-                    (proxy_url.port or 80) if proxy_url else (url.port or 443),
-                    context=self.context, timeout=None, metrics=metrics)
-                if proxy_url:
-                    self.connection.set_tunnel(url.hostname, url.port or 443)
-                self.route = route
-            self.connection.metrics = metrics
-            if self.connection.sock is None:
-                self.connection.connect()
-            path = urllib.parse.urlunsplit(("", "", url.path or "/", url.query, ""))
-            mark = time.perf_counter()
-            self.connection.request("POST", path, body=body, headers=headers)
-            metrics["send_s"] = time.perf_counter() - mark
-            mark = time.perf_counter()
-            response = self.connection.getresponse()
-            metrics["wait_headers_s"] = time.perf_counter() - mark
-            with response:
-                if not 200 <= response.status < 300:
-                    raise RuntimeError(f"Jev returned HTTP {response.status}")
-                return self._read(response, metrics)
+                metrics.update(status="skipped", transport="urllib", reason=metrics["fallback_reason"])
+                return metrics
+            self._prepare_connection(*route, metrics)
+            metrics["status"] = "ready"
+            return metrics
+        except Exception:
+            self.close()
+            raise
+        finally:
+            metrics["preconnect_total_s"] = time.perf_counter() - started
+
+    def call(self, payload, key, endpoint, metrics=None, mode="persistent"):
+        """统一入口：序列化 → 选择传输 → POST → 读取 JSON。"""
+        metrics = metrics if metrics is not None else {}
+        started = time.perf_counter()
+        try:
+            body = json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                              separators=(",", ":")).encode("utf-8")
+            metrics.update(serialize_s=time.perf_counter() - started,
+                           payload_bytes=len(body), payload_sha256=hashlib.sha256(body).hexdigest())
+            headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+            if mode == "persistent":
+                return self._call_persistent(body, headers, endpoint, metrics)
+            if mode == "urllib":
+                return self._call_urllib(body, headers, endpoint, metrics)
+            raise ValueError("Unknown transport: " + mode)
         except urllib.error.HTTPError as error:
+            self.close()
             raise RuntimeError(f"Jev returned HTTP {error.code}") from None
         except Exception:
-            # A stale connection can fail after a POST was sent. Let the existing
-            # explicit Retry flow decide; replaying silently could duplicate calls.
+            # POST 可能已到服务端；不自动重试，避免重复调用。
             self.close()
             raise
         finally:
             metrics["api_total_s"] = time.perf_counter() - started
+
+    def _call_persistent(self, body, headers, endpoint, metrics):
+        route = self._resolve_route(endpoint, metrics)
+        if route is None:
+            self.close()
+            return self._call_urllib(body, headers, endpoint, metrics)
+        url, proxy_url, route_key = route
+        self._prepare_connection(url, proxy_url, route_key, metrics)
+        path = urllib.parse.urlunsplit(("", "", url.path or "/", url.query, ""))
+        mark = time.perf_counter()
+        self.connection.request("POST", path, body=body, headers=headers)
+        metrics["send_s"] = time.perf_counter() - mark
+        mark = time.perf_counter()
+        response = self.connection.getresponse()
+        metrics["wait_headers_s"] = time.perf_counter() - mark
+        with response:
+            if not 200 <= response.status < 300:
+                raise RuntimeError(f"Jev returned HTTP {response.status}")
+            return self._read(response, metrics)
+
+    def _resolve_route(self, endpoint, metrics):
+        # 预连接和正式请求共用地址/代理规则，避免建立一条实际用不到的连接。
+        mark = time.perf_counter()
+        url = urllib.parse.urlsplit(endpoint)
+        if url.scheme != "https" or not url.hostname or url.username or url.fragment:
+            raise ValueError("Expected an HTTPS endpoint without credentials or fragment")
+        proxy = None if urllib.request.proxy_bypass(url.hostname) else urllib.request.getproxies().get("https")
+        proxy_url = urllib.parse.urlsplit(proxy if "://" in (proxy or "") else "http://" + proxy) if proxy else None
+        metrics["proxy_setup_s"] = time.perf_counter() - mark
+        if proxy_url and (proxy_url.scheme != "http" or proxy_url.username):
+            # 特殊代理沿用 urllib 兼容路径，仍使用同一份请求正文。
+            metrics["fallback_reason"] = "Proxy requires urllib transport"
+            return None
+        return url, proxy_url, (endpoint, proxy)
+
+    def _prepare_connection(self, url, proxy_url, route, metrics):
+        # 一条工作线程独占一条连接；首次建立，后续请求复用连接和 SSLContext。
+        reused = self.connection is not None and self.route == route and self.connection.sock is not None
+        metrics.update(transport="persistent", via_proxy=bool(proxy_url), connection_reused=reused)
+        if not reused:
+            self.close()
+            mark = time.perf_counter()
+            if self.context is None:
+                self.context = ssl.create_default_context()
+            metrics["ssl_context_s"] = time.perf_counter() - mark
+            self.connection = MeasuredHTTPSConnection(
+                proxy_url.hostname if proxy_url else url.hostname,
+                (proxy_url.port or 80) if proxy_url else (url.port or 443),
+                context=self.context, timeout=None, metrics=metrics)
+            if proxy_url:
+                self.connection.set_tunnel(url.hostname, url.port or 443)
+            self.route = route
+        self.connection.metrics = metrics
+        if self.connection.sock is None:
+            self.connection.connect()
+
+    def _call_urllib(self, body, headers, endpoint, metrics):
+        metrics.update(transport="urllib", connection_reused=False)
+        mark = time.perf_counter()
+        opener = urllib.request.build_opener(_MeasuredHandler(metrics))
+        metrics["proxy_setup_s"] = max(0.0, time.perf_counter() - mark - metrics["ssl_context_s"])
+        request = urllib.request.Request(endpoint, data=body, method="POST", headers=headers)
+        mark = time.perf_counter()
+        with opener.open(request, timeout=None) as response:
+            metrics["open_s"] = time.perf_counter() - mark
+            metrics["wait_headers_s"] = max(0.0, metrics["open_s"] - sum(
+                metrics.get(k, 0) for k in ("connection_init_s", "dns_s", "tcp_s", "proxy_connect_s", "tls_s")))
+            return self._read(response, metrics)
 
     @staticmethod
     def _read(response, metrics):

@@ -7,6 +7,7 @@ public class BoatParameterPanel : MonoBehaviour
     private MissionManager mission;
     private Vector2 scrollPosition;
     private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
+    private static readonly string[] decisionModes = { "Paused", "Continuous" };
     private static readonly string[] mapDescriptions = {
         "Original route / 3 checkpoints",
         "Scattered route / 5 checkpoints",
@@ -70,6 +71,13 @@ public class BoatParameterPanel : MonoBehaviour
         {
             GUILayout.Label("JEV CONTROL", titleStyle);
             bool enabled = GUI.enabled;
+            GUILayout.Label($"Decision mode: {runner.DecisionMode}", labelStyle);
+            GUI.enabled = enabled && runner.CanChangeDecisionMode && !runner.JevStarted;
+            int nextMode = GUILayout.SelectionGrid((int)runner.DecisionMode, decisionModes, 2);
+            if (nextMode != (int)runner.DecisionMode)
+                runner.TrySetDecisionMode((SimulationRunner.DecisionTimingMode)nextMode);
+            GUI.enabled = enabled;
+            GUILayout.Label("Simulation pauses while waiting for Jev. Mode switching is not available yet.", hintStyle);
             GUI.enabled = enabled && !runner.JevStarted;
             float duration = Mathf.Round(DrawSlider("Action duration", runner.actionDuration,
                 Time.fixedDeltaTime, 2f, "s") / Time.fixedDeltaTime) * Time.fixedDeltaTime;

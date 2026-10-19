@@ -146,6 +146,7 @@ def make_instructions(duration, requires_stop):
 
 
 def build_payload(observation, model="jev-latest"):
+    # 深拷贝后转换坐标，原始观测保留给日志；参考路线不进入模型输入。
     state = {field: copy.deepcopy(observation[field]) for field in MODEL_STATE_FIELDS}
     boat, target = state["boat"], state["target"]
     x, y = boat.pop("position_xy_m")
@@ -182,8 +183,9 @@ def build_payload(observation, model="jev-latest"):
 
 def decode_action(response):
     answers = response.get("answers") if isinstance(response, dict) else None
-    if not isinstance(answers, dict) or set(answers) != {"action_0"}:
-        raise ValueError("Expected one action_0 answer")
+    # 只读取所需题目；额外回答不影响动作，非法选项仍会报错。
+    if not isinstance(answers, dict) or "action_0" not in answers:
+        raise ValueError("Expected action_0 answer")
     answer = answers["action_0"]
     if not isinstance(answer, dict) or answer.get("type") != "choice":
         raise ValueError("Expected Choice answer for action_0")

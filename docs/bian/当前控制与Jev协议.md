@@ -102,7 +102,9 @@ HTTP state 不包含全局位置与航向。船体坐标中船位于原点并朝
 
 动作必须执行整数个物理步，默认 0.4 秒对应 20 步。动作结束后取消控制并用最新状态请求下一次决策；任务完成时提前停止剩余执行。等待回答时不推进物理。重复响应只确认、不重启动作，过期响应不影响当前决策；非法动作或时长不匹配会暂停并报告错误。
 
-UDP 重发、缓存和确认机制保持原逻辑。API 失败时使用 `Retry Jev`，没有本地备用控制器或决策超时。
+UDP 决策请求与结果均只发送一次，不再定时重发，也不发送 ACK。Python 仅保留近期请求身份用于去重；Unity 继续忽略重复或过期结果，10 Hz 状态广播不受影响。丢包或 API 失败时可使用 `Retry Jev`，没有本地备用控制器或决策超时。
+
+参数面板的 `Decision mode` 当前固定为 `Paused`，模式选择禁用。`SimulationRunner.TrySetDecisionMode()` 预留未来设置入口，目前拒绝 `Continuous`；观测中的 `simulation_paused_while_deciding` 从当前模式读取。详细代码结构和运行说明见 [jev_api/README](../../jev_api/README.md)。
 
 ## 5. 日志与验证
 
@@ -115,11 +117,5 @@ UDP 重发、缓存和确认机制保持原逻辑。API 失败时使用 `Retry J
 经过代理时，DNS/TCP 是连接本地代理的耗时；TLS 区间可能包含代理上游建连和远端 DNS，不能单独认定为纯 TLS 运算。`wait_headers_s` 包含网络往返、服务端排队和推理，接口未提供 `Server-Timing` 时不能进一步拆分。`open_s` 是 urllib 的重叠总量，不能与各阶段相加。
 
 客户端无需新增 Python 依赖。耗时对照结果与原始数据位置见实验记录；本次新增的辅助测评脚本已在实验后删除。
-
-离线协议测试：
-
-```powershell
-python -m unittest discover -s jev_api -p "test_*.py" -v
-```
 
 全部历史改动、实验及测试统一记录在 [Jev 仿真实验记录](Jev仿真实验记录.md)，后续也只更新该文件，不另建实验或验证记录。历史协议字段仅反映当时配置。

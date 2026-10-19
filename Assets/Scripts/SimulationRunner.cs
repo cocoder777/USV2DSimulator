@@ -7,6 +7,10 @@ using UnityEngine;
 public sealed class SimulationRunner : MonoBehaviour
 {
     public enum RunState { Initializing, Manual, Ready, Waiting, Executing, Completed, Failed }
+    public enum DecisionTimingMode { Paused, Continuous }
+    public DecisionTimingMode DecisionMode { get; private set; } = DecisionTimingMode.Paused;
+    public bool PauseWhileDeciding => DecisionMode == DecisionTimingMode.Paused;
+    public bool CanChangeDecisionMode => false;
     public const int ProtocolVersion = 5;
     public bool JevStarted { get; private set; }
     [Min(0.02f)] public float actionDuration = 0.4f;
@@ -53,9 +57,16 @@ public sealed class SimulationRunner : MonoBehaviour
     }
     public void StopJev() { JevStarted = false; Invalidate(); }
     public void Retry() { Invalidate(); }
+    // 预留统一设置入口；不暂停调度尚未实现，不能只切换标签或协议标志。
+    public bool TrySetDecisionMode(DecisionTimingMode mode)
+    {
+        if (mode != DecisionTimingMode.Paused || JevStarted) return false;
+        DecisionMode = mode;
+        return true;
+    }
     public void Invalidate()
     {
-        player.Cancel(); bridge?.SetDecisionRequest(null);
+        player.Cancel(); bridge?.CancelDecisionRequest();
         DecisionId = null; identity = null; LastError = null; State = RunState.Initializing;
     }
     private string Identity() => boat.SessionId + "/" + boat.EpisodeId + "/" + boat.RunId + "/" + mission.Revision;
@@ -67,7 +78,7 @@ public sealed class SimulationRunner : MonoBehaviour
         bridge?.PumpIncoming();
         if (mission.Progress == null) { State = RunState.Initializing; return; }
         if (mission.Progress.Completed)
-        { if (State != RunState.Completed) { player.Cancel(); bridge?.SetDecisionRequest(null); State = RunState.Completed; } return; }
+        { if (State != RunState.Completed) { player.Cancel(); bridge?.CancelDecisionRequest(); State = RunState.Completed; } return; }
         if (boat.Mode != BoatDynamics2D.ControlMode.Jev)
         { State = RunState.Manual; return; }
         if (!JevStarted) { State = RunState.Ready; return; }
@@ -85,7 +96,7 @@ public sealed class SimulationRunner : MonoBehaviour
             identity = Identity(); parameters = Parameters(); DecisionId = Guid.NewGuid().ToString("N");
             var observation = ObservationBuilder.ForModel(boat, mission, requestedDuration);
             var packet = Envelope("decision_request"); packet["observation"] = observation;
-            bridge.SetDecisionRequest(packet.ToString(Newtonsoft.Json.Formatting.None));
+            bridge.QueueDecisionRequest(packet.ToString(Newtonsoft.Json.Formatting.None));
             State = RunState.Waiting;
         }
         catch (Exception error) { Fail(error.Message); }
@@ -99,8 +110,6 @@ public sealed class SimulationRunner : MonoBehaviour
             || (int?)packet["version"] != ProtocolVersion || (string)packet["session_id"] != boat.SessionId
             || (string)packet["episode_id"] != boat.EpisodeId || (string)packet["run_id"] != boat.RunId
             || (string)packet["decision_id"] != DecisionId || (long?)packet["tick"] != requestTick) return;
-        if (State == RunState.Executing || State == RunState.Completed || State == RunState.Failed)
-        { bridge.SendPacket(Envelope("decision_ack").ToString(Newtonsoft.Json.Formatting.None)); return; }
         if (State != RunState.Waiting) return;
         try
         {
@@ -117,13 +126,12 @@ public sealed class SimulationRunner : MonoBehaviour
             if (Math.Abs((double)packet["action_duration_s"] - requestedDuration) > 1e-6)
                 throw new FormatException("Response changed action duration.");
             player.AcceptAction(action.ToObject<DiscreteBoatAction>(), requestedDuration, Time.fixedDeltaTime);
-            bridge.SetDecisionRequest(null); State = RunState.Executing;
-            bridge.SendPacket(Envelope("decision_ack").ToString(Newtonsoft.Json.Formatting.None));
+            bridge.CancelDecisionRequest(); State = RunState.Executing;
         }
-        catch (Exception error) { Fail(error.Message); bridge?.SendPacket(Envelope("decision_ack").ToString(Newtonsoft.Json.Formatting.None)); }
+        catch (Exception error) { Fail(error.Message); }
     }
     private void Fail(string error)
-    { player.Cancel(); bridge?.SetDecisionRequest(null); LastError = error; State = RunState.Failed; }
+    { player.Cancel(); bridge?.CancelDecisionRequest(); LastError = error; State = RunState.Failed; }
     public bool Advance(float dt)
     {
         Pump();
@@ -136,7 +144,7 @@ public sealed class SimulationRunner : MonoBehaviour
         Vector2 previous = boat.Position; boat.Step(dt); mission.Evaluate(previous);
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
         { player.FinishStep(); if (!player.HasAction) State = RunState.Initializing; }
-        if (mission.Progress.Completed) { player.Cancel(); bridge?.SetDecisionRequest(null); State = RunState.Completed; }
+        if (mission.Progress.Completed) { player.Cancel(); bridge?.CancelDecisionRequest(); State = RunState.Completed; }
         StepCompleted?.Invoke();
         return true;
     }

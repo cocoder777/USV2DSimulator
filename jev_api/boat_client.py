@@ -1,26 +1,13 @@
-"""Jev decision worker. Unity owns simulation and pauses while this process calls HTTPS."""
+"""Unity 的 UDP 入口；默认暂停决策，HTTPS 在后台线程执行。"""
 import argparse
-from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import socket
-import time
-import threading
 
-from http_transport import JevTransport
-
-from choice_control import ACTION_CHOICES, MODEL_STATE_FIELDS, build_payload, decode_action, make_instructions
+from decision_worker import DecisionScheduler, IDENTITY_FIELDS, PROTOCOL_VERSION
 
 API_KEY = 'apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141'
-
 MAX_PACKET = 8192
-PROTOCOL_VERSION = 5
-IDENTITY_FIELDS = ("session_id", "episode_id", "run_id", "decision_id", "tick")
-
-
-def identity(packet):
-    return tuple(packet.get(key) for key in IDENTITY_FIELDS)
 
 
 def dumps(value):
@@ -47,59 +34,62 @@ def valid_request(packet):
         return False
 
 
-
-_worker = threading.local()
-
-
-def call_api(payload, key, endpoint, timings=None, transport="persistent"):
-    if not hasattr(_worker, "http"):
-        _worker.http = JevTransport()
-    return _worker.http.call(payload, key, endpoint, timings, transport)
-
-
-def close_api():
-    if hasattr(_worker, "http"):
-        _worker.http.close()
-
-
-def decide(packet, settings, key, log):
-    started = time.monotonic()
-    envelope = {k: packet[k] for k in IDENTITY_FIELDS}
-    envelope["version"] = PROTOCOL_VERSION
-    payload = None
-    timings = {}
+def receive_packet(sock, endpoint):
+    """只接收约定 Unity 地址的合法 JSON；无消息时返回 None。"""
     try:
-        payload = build_payload(packet["observation"], settings.model)
-        timings["build_payload_s"] = time.monotonic() - started
-        raw = call_api(payload, key, settings.endpoint, timings,
-                       getattr(settings, "http_transport", "persistent"))
-        decode_started = time.monotonic()
-        action = decode_action(raw)
-        timings["decode_action_s"] = time.monotonic() - decode_started
-        result = dict(envelope, type="decision_result", action=action,
-                      action_duration_s=packet["observation"]["planning"]["action_duration_s"])
-    except Exception as error:
-        raw = None
-        result = dict(envelope, type="decision_error", error=f"{type(error).__name__}: {error}")
+        data, source = sock.recvfrom(MAX_PACKET + 1)
+    except socket.timeout:
+        return None
+    except OSError as error:
+        if getattr(error, "winerror", None) in (10040, 10054):
+            return None
+        raise
+    if source != endpoint or len(data) > MAX_PACKET:
+        return None
+    try:
+        packet = json.loads(data.decode("utf-8"), parse_constant=reject_constant)
+        return packet if isinstance(packet, dict) else None
+    except (ValueError, UnicodeError):
+        return None
+
+
+def reject_constant(value):
+    raise ValueError("Non-finite JSON number: " + value)
+
+
+def report_decision(record, log):
+    """完整记录写文件，终端只显示便于比较的耗时和连接状态。"""
     if log:
-        log.write(dumps({"event": "decision", "elapsed_s": time.monotonic() - started,
-                         "timings": timings, "request": packet, "payload": payload, "raw_response": raw, "result": result}) + "\n")
+        log.write(dumps(record) + "\n")
         log.flush()
-    print(dumps({"event": result["type"], "tick": packet["tick"], "action": result.get("action"),
-                 "error": result.get("error"), "elapsed_s": round(time.monotonic() - started, 3)}), flush=True)
-    return result
+    result, timings = record["result"], record["timings"]
+    connect_s = sum(timings.get(field, 0) for field in (
+        "ssl_context_s", "connection_init_s", "dns_s", "tcp_s", "proxy_connect_s", "tls_s"))
+    connection = ("reused" if timings["connection_reused"] else "new") if "connection_reused" in timings else "not_started"
+    print(dumps({"event": result["type"], "decision_id": result["decision_id"], "tick": result["tick"],
+                 "worker": record["worker"], "transport": timings.get("transport"), "connection": connection,
+                 "queue_s": round(timings["queue_s"], 4), "connect_s": round(connect_s, 4),
+                 "wait_headers_s": round(timings.get("wait_headers_s", 0), 4),
+                 "api_s": round(timings.get("api_total_s", 0), 4), "elapsed_s": round(record["elapsed_s"], 4),
+                 "action": result.get("action"), "error": result.get("error")}), flush=True)
+
+
+def completed(packet, settings, log):
+    mission = packet.get("mission")
+    if not (settings.exit_on_complete and isinstance(mission, dict) and mission.get("status") == "Completed"):
+        return False
+    if log:
+        log.write(dumps({"event": "completed", "state": packet}) + "\n")
+        log.flush()
+    print(dumps({"event": "completed", "simulation_time": packet.get("simulation_time"),
+                 "position": [packet.get("x"), packet.get("y")], "speed": packet.get("speed")}), flush=True)
+    return True
 
 
 def serve(settings):
-    key = API_KEY
     endpoint = (socket.gethostbyname(settings.host), settings.port)
     log = open(settings.log, "a", encoding="utf-8") if settings.log else None
-    pool = ThreadPoolExecutor(max_workers=1)
-    future = None
-    active_request = None
-    queued = None
-    cache = OrderedDict()
-    awaiting_ack = {}
+    scheduler = DecisionScheduler(settings, API_KEY)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -108,68 +98,28 @@ def serve(settings):
             if hasattr(socket, "SIO_UDP_CONNRESET"):
                 sock.ioctl(socket.SIO_UDP_CONNRESET, False)
             sock.settimeout(0.01)
-            print(f"Jev worker listening on {settings.listen_host}:{settings.listen_port}; Unity={endpoint}", flush=True)
+            print("Preparing HTTPS connections; no decision request is sent...", flush=True)
+            for record in scheduler.prepare_connections():
+                if log:
+                    log.write(dumps(record) + "\n")
+                    log.flush()
+                print(dumps(record), flush=True)
+            print(f"Jev worker listening on {settings.listen_host}:{settings.listen_port}; Unity={endpoint}; workers={settings.workers}", flush=True)
             while True:
-                if future is not None and future.done():
-                    result = future.result()
-                    request_id = identity(active_request)
-                    cache[request_id] = result
-                    if len(cache) > 256:
-                        cache.popitem(last=False)
-                    awaiting_ack[request_id] = (result, 0)
-                    future = None
-                    active_request = None
-                if future is None and queued is not None:
-                    active_request, queued = queued, None
-                    future = pool.submit(decide, active_request, settings, key, log)
-                now = time.monotonic()
-                for request_id, (result, sent) in list(awaiting_ack.items()):
-                    if now - sent >= 0.3:
-                        sock.sendto(dumps(result).encode(), endpoint)
-                        awaiting_ack[request_id] = (result, now)
-                try:
-                    data, source = sock.recvfrom(MAX_PACKET + 1)
-                except socket.timeout:
+                # API 不阻塞 UDP；每份结果只发一次，不主动重发，也不等待 ACK。
+                for record in scheduler.collect_results():
+                    report_decision(record, log)
+                    sock.sendto(dumps(record["result"]).encode("utf-8"), endpoint)
+                packet = receive_packet(sock, endpoint)
+                if packet is None:
                     continue
-                except OSError as error:
-                    if getattr(error, "winerror", None) in (10040, 10054):
-                        continue
-                    raise
-                if source != endpoint or len(data) > MAX_PACKET:
-                    continue
-                try:
-                    packet = json.loads(data.decode("utf-8"), parse_constant=lambda v: (_ for _ in ()).throw(ValueError(v)))
-                except (ValueError, UnicodeError):
-                    continue
-                if not isinstance(packet, dict):
-                    continue
-                if packet.get("type") == "state":
-                    if packet.get("version") != PROTOCOL_VERSION:
-                        continue
-                    if (packet.get("mission") or {}).get("status") == "Completed" and settings.exit_on_complete:
-                        if log:
-                            log.write(dumps({"event": "completed", "state": packet}) + "\n"); log.flush()
-                        print(dumps({"event": "completed", "simulation_time": packet.get("simulation_time"),
-                                     "position": [packet.get("x"), packet.get("y")], "speed": packet.get("speed")}), flush=True)
+                if packet.get("type") == "state" and packet.get("version") == PROTOCOL_VERSION:
+                    if completed(packet, settings, log):
                         return
-                    continue
-                request_id = identity(packet)
-                if packet.get("type") == "decision_ack" and packet.get("version") == PROTOCOL_VERSION:
-                    awaiting_ack.pop(request_id, None)
-                    continue
-                if not valid_request(packet):
-                    continue
-                # A new request supersedes unacknowledged results from earlier decisions.
-                awaiting_ack = {k: v for k, v in awaiting_ack.items() if k == request_id}
-                if request_id in cache:
-                    sock.sendto(dumps(cache[request_id]).encode(), endpoint)
-                elif future is not None and request_id == identity(active_request):
-                    continue
-                else:
-                    queued = packet
+                elif valid_request(packet):
+                    scheduler.submit(packet)
     finally:
-        pool.submit(close_api).result()
-        pool.shutdown(wait=True)
+        scheduler.close()
         if log:
             log.close()
 
@@ -184,11 +134,15 @@ def main():
     parser.add_argument("--endpoint", default="https://api.typesafe.ai/v1/systemone")
     parser.add_argument("--http-transport", choices=("persistent", "urllib"), default="persistent",
                         help="Reuse HTTPS connections (default), or use the original urllib transport")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Concurrent API calls; default 1 for the paused simulation")
     parser.add_argument("--log")
     parser.add_argument("--exit-on-complete", action="store_true")
     settings = parser.parse_args()
     if any(not 1 <= p <= 65535 for p in (settings.port, settings.listen_port)):
         parser.error("Ports must be 1..65535")
+    if settings.workers < 1:
+        parser.error("Workers must be positive")
     try:
         serve(settings)
     except KeyboardInterrupt:

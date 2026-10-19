@@ -27,8 +27,7 @@ public class BoatUdpBridge : MonoBehaviour
     private readonly object gate = new object();
     private readonly Queue<string> incoming = new Queue<string>();
     private byte[] outgoing;
-    private byte[] decisionRequest;
-    private readonly Queue<byte[]> replies = new Queue<byte[]>();
+    private byte[] pendingDecision;
     public event Action<JObject> DecisionReceived;
     private long outgoingRevision, stateSequence;
     private double nextStateTime;
@@ -93,19 +92,14 @@ public class BoatUdpBridge : MonoBehaviour
         }
     }
 
-    public void SetDecisionRequest(string json)
-    {
-        byte[] bytes = json == null ? null : Encoding.UTF8.GetBytes(json);
-        if (bytes != null && bytes.Length > 8192) throw new ArgumentException("Decision request exceeds 8192-byte protocol budget.");
-        lock (gate) { decisionRequest = bytes; }
-    }
-
-    public void SendPacket(string json)
+    public void QueueDecisionRequest(string json)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(json);
-        if (bytes.Length > 8192) throw new ArgumentException("UDP packet exceeds protocol budget.");
-        lock (gate) { if (replies.Count >= 64) replies.Dequeue(); replies.Enqueue(bytes); }
+        if (bytes.Length > 8192) throw new ArgumentException("Decision request exceeds 8192-byte protocol budget.");
+        lock (gate) { pendingDecision = bytes; }
     }
+
+    public void CancelDecisionRequest() { lock (gate) { pendingDecision = null; } }
 
     void LateUpdate()
     {
@@ -121,8 +115,6 @@ public class BoatUdpBridge : MonoBehaviour
     private void NetworkLoop(UdpClient boundSocket, IPEndPoint endpoint)
     {
         long sentRevision = -1;
-        double nextDecisionSend = 0;
-        byte[] lastDecision = null;
         var utf8 = new UTF8Encoding(false, true);
         try
         {
@@ -150,12 +142,10 @@ public class BoatUdpBridge : MonoBehaviour
                         if (snapshot.Length <= 8192) boundSocket.Send(snapshot, snapshot.Length, endpoint);
                         sentRevision = revision;
                     }
-                    byte[] decision, reply = null;
-                    lock (gate) { decision = decisionRequest; if (replies.Count > 0) reply = replies.Dequeue(); }
-                    if (reply != null) boundSocket.Send(reply, reply.Length, endpoint);
-                    if (decision != lastDecision) { lastDecision = decision; nextDecisionSend = 0; }
-                    if (decision != null && Now >= nextDecisionSend)
-                    { boundSocket.Send(decision, decision.Length, endpoint); nextDecisionSend = Now + 0.3; }
+                    // 取走即清空，每份决策只发送一次；新决策由 SimulationRunner 显式提交。
+                    byte[] decision;
+                    lock (gate) { decision = pendingDecision; pendingDecision = null; }
+                    if (decision != null) boundSocket.Send(decision, decision.Length, endpoint);
                 }
                 catch (SocketException exception) when (exception.SocketErrorCode == SocketError.ConnectionReset
                     || exception.SocketErrorCode == SocketError.ConnectionRefused
@@ -175,6 +165,6 @@ public class BoatUdpBridge : MonoBehaviour
         // Socket closure unblocks receive; joining prevents a previous worker using new state on re-enable.
         worker?.Join();
         worker = null;
-        lock (gate) { incoming.Clear(); replies.Clear(); outgoing = null; decisionRequest = null; socket = null; }
+        lock (gate) { incoming.Clear(); outgoing = null; pendingDecision = null; socket = null; }
     }
 }

@@ -31,10 +31,11 @@ public static class ObservationBuilder
         parameters.Remove("fixed_dt");
         parameters.Remove("acceleration_time_constant");
         parameters.Remove("angular_acceleration_time_constant");
+        bool pauseWhileDeciding = boat.GetComponent<SimulationRunner>()?.PauseWhileDeciding ?? true;
         return new JObject {
             ["coordinates"] = "Global XY in metres. Heading in degrees: 0=east, 90=north; counterclockwise positive.",
             ["planning"] = new JObject { ["action_duration_s"] = actionDuration,
-                ["simulation_paused_while_deciding"] = true },
+                ["simulation_paused_while_deciding"] = pauseWhileDeciding },
             ["action_space"] = new JObject {
                 ["acceleration_fractions"] = new JArray(DiscreteAction.AccelerationFractions),
                 ["turn_fractions"] = new JArray(DiscreteAction.TurnFractions) },

@@ -11,7 +11,7 @@ New-Item -ItemType Directory -Force Logs | Out-Null
 python jev_api/boat_client.py --log Logs/jev.jsonl
 ```
 
-启动时客户端先打印 `Preparing HTTPS connections`，为每个工作线程预先建立自己的 HTTPS 连接，然后打印 `preconnect` 记录和 `Jev worker listening`。看到这些输出后，在 Unity 选择 Level 0、Jev 模式、0.40 秒动作时长，再点击 Start Jev。参数面板的 Decision mode 显示 Paused，模式选择暂时禁用。`SimulationRunner.TrySetDecisionMode()` 是未来模式设置入口，目前拒绝 Continuous；协议中的暂停标志从当前模式读取。`--exit-on-complete` 可让客户端在收到完成广播后退出；做下一局对比时，应先重置地图，再启动带此参数的客户端，最后 Start Jev，避免收到上一局的完成广播就退出。
+启动时客户端先打印 `Preparing HTTPS connections`，为每个工作线程预先建立自己的 HTTPS 连接，然后打印 `preconnect` 记录和 `Jev worker listening`。看到这些输出后，在 Unity 选择 Level 0、Jev 模式、0.40 秒动作时长，再点击 Start Jev。参数面板的 Decision mode 显示 Paused，模式选择暂时禁用。`SimulationRunner.TrySetDecisionMode()` 是未来模式设置入口，目前拒绝 Continuous；协议中的暂停标志从当前模式读取。客户端收到任务完成通知时始终记录日志，`--exit-on-complete` 只决定是否随后退出。完成通知只发送一次，应先启动客户端，再开始任务。
 
 `examples/route_ticket.py` 是独立 SDK 示例，可用 `python jev_api/examples/route_ticket.py` 运行，需要 `requirements.txt` 中的 typesafe-sdk。它不参与船的决策。正式客户端仅依赖标准库。
 
@@ -34,11 +34,11 @@ python jev_api/boat_client.py --log Logs/jev.jsonl
 | 文件 | 阅读重点 | 不需要在这里理解的内容 |
 | --- | --- | --- |
 | `boat_client.py` | `serve()`：收消息、交任务、取结果、发回 Unity；`report_decision()`：日志 | 题目如何构造、HTTPS 如何建连 |
-| `decision_worker.py` | `execute_decision()`：一次决策；`DecisionScheduler`：去重和后台调度 | UDP socket、具体运动规则 |
+| `decision_worker.py` | `DecisionScheduler._execute()`：一次决策；`submit()`：去重和后台调度 | UDP socket、具体运动规则 |
 | `choice_control.py` | `build_payload()`、`make_instructions()`、`decode_action()` | 线程、网络、日志 |
 | `http_transport.py` | `JevTransport.call()`：JSON 请求和响应；内部方法处理连接和计时 | Unity 状态、动作含义 |
 
-推荐先读 `execute_decision()` 中的三步：`build_payload()` → `transport.call()` → `decode_action()`，再读 `serve()`，最后按需要展开调度和 HTTPS 的内部实现。
+按请求顺序阅读：`serve()` → `submit()` → `_start()` → `_execute()`。`_start()` 用线程池提交 `_execute()`；后者在工作线程中直接完成 `build_payload()` → `self.local.transport.call()` → `decode_action()`，没有额外转发函数。完成记录由主循环的 `collect_results()` 取回，再发送给 Unity。排队请求腾出空位后也经 `_start()` 启动，因此保留这个共用入口。
 
 ## 暂停版本的数据流
 
@@ -52,16 +52,19 @@ flowchart TD
     C --> D[UDP 5005 → 5006]
     D --> E[boat_client.receive_packet<br/>来源、JSON、协议检查]
     E --> F[DecisionScheduler.submit<br/>重复身份忽略；后台执行]
-    F --> G[execute_decision]
-    G --> H[choice_control.build_payload<br/>目标转船体坐标；构造 action_0 的 56 个选项]
+    F --> G[DecisionScheduler._start → _execute]
+    G --> H[choice_control.build_payload<br/>目标转船体坐标；构造 action 的 56 个选项]
     H --> I[JevTransport.call<br/>POST model + state + questions]
-    I --> J[Jev 返回 answers.action_0.choice]
+    I --> J[Jev 返回 answers.action.choice]
     J --> K[http_transport._read<br/>响应正文解析成 Python 字典]
     K --> L[choice_control.decode_action<br/>合法选项名 → 两个动作索引]
     L --> M[封装 decision_result<br/>身份和动作时长保持原样]
     M --> N[主线程 collect_results<br/>记录耗时；UDP 结果只发送一次]
     N --> O[Unity 校验结果并执行动作]
-    O --> A
+    O --> Q{任务是否完成}
+    Q -->|未完成| A
+    Q -->|已完成| T[Unity 发送一次 mission_completed]
+    T --> U[Python 记录完成通知<br/>按 exit-on-complete 决定是否退出]
 ```
 
 UDP 是 Unity 和本机 Python 之间的消息传递；HTTPS 是 Python 和远程 Jev 之间的一次请求/响应。HTTP 接口仍为：
@@ -72,15 +75,27 @@ Authorization: Bearer <API_KEY>
 Content-Type: application/json
 ```
 
-模型输入不包含 UDP 身份字段、船的全局位置和航向、整条参考路线。Python 将当前目标转成船体坐标，通过 `state` 提供状态，通过 `questions.action_0` 请求选择。合法的额外回答会被忽略，但 `action_0` 必须是 choice，选项名必须存在于本地映射表。
+模型输入不包含 UDP 身份字段、船的全局位置和航向、整条参考路线。Python 将当前目标转成船体坐标，通过 `state` 提供状态，通过 `questions.action` 请求选择。合法的额外回答会被忽略，但 `action` 必须是 choice，选项名必须存在于本地映射表。
 
 构造、HTTP 或解码失败时，返回同一身份的 `decision_error`；解码失败仍在日志保留原始响应。没有备用控制器，也没有自动重试 POST。
 
 ## 去掉了哪些重发机制
 
-Unity 和 Python 均不主动重发决策数据。Unity 将新请求交给网络线程，取走后即清空，只发送一次；收到结果后不再发送 ACK。Python 每个完成结果只发送一次，不保留待 ACK 表和完整结果缓存。Python 仍记录最近 256 个已接收请求的身份，忽略重复数据报，不重新调用 API，也不重新发送已完成结果。正在执行和当前待执行的请求另外检查身份，不受历史窗口淘汰影响。10 Hz 状态广播继续发送新状态，与决策请求重发无关。
+Unity 和 Python 均不主动重发决策数据。Unity 将新请求交给网络线程，只发送一次；收到结果后不再发送 ACK。Python 每个完成结果只发送一次，不保留待 ACK 表和完整结果缓存。Python 仍记录最近 256 个已接收请求的身份，忽略重复数据报，不重新调用 API，也不重新发送已完成结果。正在执行和当前待执行的请求另外检查身份，不受历史窗口淘汰影响。
 
 如果请求或结果丢失，不会自动补发；暂不增加决策超时，按当前需求可手动 Retry Jev。这里删除的是应用层 UDP 重发，HTTPS 的连接复用不受影响。
+
+## UDP 只传决策和任务完成通知
+
+不再周期性广播船状态，也不发送任务开始信号。每份 `decision_request` 自带本次观测及运行身份，Python 不需要先接收状态或开始通知。Unity 的界面和轨迹记录继续直接读取本地状态。
+
+任务完成后，Unity 统一通过 `CompleteMission()` 取消剩余动作、进入 Completed，并且每个 episode 只发送一次：
+
+```json
+{"type":"mission_completed","version":5,"session_id":"s","episode_id":"e","run_id":"r","tick":858}
+```
+
+完成通知使用实际完成 tick，不使用上一次决策的采样 tick，也不携带船状态或 `decision_id`。请求和完成通知共用发送队列；取消待发送决策时保留完成通知。Python 校验通知后通过 `record_completion()` 记录 `event: completed` 和原始 `notification`，无论是否设置 `--exit-on-complete`。没有完成通知的周期重发或历史补发。
 
 ## 后台调度和未来请求重叠
 

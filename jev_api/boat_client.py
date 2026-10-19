@@ -74,16 +74,19 @@ def report_decision(record, log):
                  "action": result.get("action"), "error": result.get("error")}), flush=True)
 
 
-def completed(packet, settings, log):
-    mission = packet.get("mission")
-    if not (settings.exit_on_complete and isinstance(mission, dict) and mission.get("status") == "Completed"):
-        return False
+def valid_completion(packet):
+    return (packet.get("type") == "mission_completed"
+            and type(packet.get("version")) is int and packet["version"] == PROTOCOL_VERSION
+            and all(isinstance(packet.get(field), str) and packet[field] for field in IDENTITY_FIELDS[:3])
+            and type(packet.get("tick")) is int and packet["tick"] >= 0)
+
+
+def record_completion(packet, log):
+    record = {"event": "completed", "notification": packet}
     if log:
-        log.write(dumps({"event": "completed", "state": packet}) + "\n")
+        log.write(dumps(record) + "\n")
         log.flush()
-    print(dumps({"event": "completed", "simulation_time": packet.get("simulation_time"),
-                 "position": [packet.get("x"), packet.get("y")], "speed": packet.get("speed")}), flush=True)
-    return True
+    print(dumps(record), flush=True)
 
 
 def serve(settings):
@@ -107,17 +110,22 @@ def serve(settings):
             print(f"Jev worker listening on {settings.listen_host}:{settings.listen_port}; Unity={endpoint}; workers={settings.workers}", flush=True)
             while True:
                 # API 不阻塞 UDP；每份结果只发一次，不主动重发，也不等待 ACK。
+                # 检查有没有完成的决策，如果完成的通过UDP交给unity
                 for record in scheduler.collect_results():
                     report_decision(record, log)
                     sock.sendto(dumps(record["result"]).encode("utf-8"), endpoint)
+                # 接收unity消息
                 packet = receive_packet(sock, endpoint)
                 if packet is None:
                     continue
-                if packet.get("type") == "state" and packet.get("version") == PROTOCOL_VERSION:
-                    if completed(packet, settings, log):
-                        return
-                elif valid_request(packet):
+                # 如果收到的是决策请求
+                if valid_request(packet):
                     scheduler.submit(packet)
+                # 完成通知始终记录，参数只决定是否退出客户端。
+                elif valid_completion(packet):
+                    record_completion(packet, log)
+                    if settings.exit_on_complete:
+                        return
     finally:
         scheduler.close()
         if log:

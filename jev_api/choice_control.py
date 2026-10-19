@@ -172,7 +172,7 @@ def build_payload(observation, model="jev-latest"):
             "Both situations must fit.")
     planning = state["planning"]
     questions = {
-        "action_0": {
+        "action": {
             "type": "choice",
             "instructions": make_instructions(planning["action_duration_s"], requires_stop),
             "criteria": dict(criteria),
@@ -184,12 +184,12 @@ def build_payload(observation, model="jev-latest"):
 def decode_action(response):
     answers = response.get("answers") if isinstance(response, dict) else None
     # 只读取所需题目；额外回答不影响动作，非法选项仍会报错。
-    if not isinstance(answers, dict) or "action_0" not in answers:
-        raise ValueError("Expected action_0 answer")
-    answer = answers["action_0"]
+    if not isinstance(answers, dict) or "action" not in answers:
+        raise ValueError("Expected action answer")
+    answer = answers["action"]
     if not isinstance(answer, dict) or answer.get("type") != "choice":
-        raise ValueError("Expected Choice answer for action_0")
+        raise ValueError("Expected Choice answer for action")
     key = answer.get("choice")
     if not isinstance(key, str) or key not in ACTION_CHOICES:
-        raise ValueError("Unknown joint action for action_0")
+        raise ValueError("Unknown joint action for action")
     return dict(ACTION_CHOICES[key])

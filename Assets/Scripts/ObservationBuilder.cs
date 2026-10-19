@@ -1,24 +1,6 @@
 using System;
 using Newtonsoft.Json.Linq;
 
-[Serializable]
-public sealed class MissionSnapshot
-{
-    public string route_id, status;
-    public int route_revision, passed_count;
-    public TargetRouteData.RoutePoint next_target;
-    public float arrival_radius_m, stop_speed_mps;
-
-    public static MissionSnapshot Capture(MissionManager mission)
-    {
-        if (mission == null || mission.Route == null) return null;
-        return new MissionSnapshot { route_id = mission.Route.route_id, route_revision = mission.Revision,
-            status = mission.Status, passed_count = mission.Progress.NextIndex,
-            next_target = mission.Progress.Next, arrival_radius_m = mission.Route.arrival_radius_m,
-            stop_speed_mps = mission.Route.stop_speed_mps };
-    }
-}
-
 public static class ObservationBuilder
 {
     // Only measured state, current target and plant parameters; reference curves are for display/export.

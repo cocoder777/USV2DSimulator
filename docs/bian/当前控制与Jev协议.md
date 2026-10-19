@@ -24,7 +24,7 @@ HTTP 请求顶层为 `model`、`state`、`questions`。默认模型 `jev-latest`
 
 1. `SimulationRunner.BeginDecision()` 调用 `ObservationBuilder.ForModel()`，采集船状态及当前目标。
 2. `BoatUdpBridge` 将 `decision_request` 发给 Python。
-3. `choice_control.py:build_payload()` 转换目标坐标，构建唯一一道 `action_0` Choice。
+3. `choice_control.py:build_payload()` 转换目标坐标，构建唯一一道 `action` Choice。
 4. `call_api()` 请求 Jev；`decode_action()` 将选项名称映射为一个线/角加速度索引对。
 
 | HTTP state 字段 | 内容 |
@@ -56,7 +56,7 @@ HTTP state 不包含全局位置与航向。船体坐标中船位于原点并朝
 
 `TASK` 保留现有运动规则、方向说明和状态示例，`make_instructions(duration, requires_stop)` 组合当前目标说明，并询问接下来指定时长内的动作。
 
-每次只有一道 `action_0`，包含 56 个联合选项。线输入八档比例为：
+每次只有一道 `action`，包含 56 个联合选项。线输入八档比例为：
 
 ```text
 [-1, -2/3, -1/3, 0, 0.25, 0.5, 0.75, 1]
@@ -75,7 +75,7 @@ HTTP state 不包含全局位置与航向。船体坐标中船位于原点并朝
 供本地解码的 API 响应关键内容：
 
 ```json
-{"answers":{"action_0":{"type":"choice","choice":"positive_gentle__clockwise_gentle"}}}
+{"answers":{"action":{"type":"choice","choice":"positive_gentle__clockwise_gentle"}}}
 ```
 
 `decode_action()` 严格检查唯一的问题 ID、类型和选项名称，直接返回 `acceleration_index=4, turn_index=2`。概率和置信度保存在原始响应中，不在本地重新选择动作；非法响应返回错误并暂停。
@@ -102,13 +102,15 @@ HTTP state 不包含全局位置与航向。船体坐标中船位于原点并朝
 
 动作必须执行整数个物理步，默认 0.4 秒对应 20 步。动作结束后取消控制并用最新状态请求下一次决策；任务完成时提前停止剩余执行。等待回答时不推进物理。重复响应只确认、不重启动作，过期响应不影响当前决策；非法动作或时长不匹配会暂停并报告错误。
 
-UDP 决策请求与结果均只发送一次，不再定时重发，也不发送 ACK。Python 仅保留近期请求身份用于去重；Unity 继续忽略重复或过期结果，10 Hz 状态广播不受影响。丢包或 API 失败时可使用 `Retry Jev`，没有本地备用控制器或决策超时。
+UDP 决策请求与结果均只发送一次，不再定时重发，也不发送 ACK。Python 仅保留近期请求身份用于去重；Unity 继续忽略重复或过期结果。不再广播船状态或发送任务开始信号，每份请求自带完整观测和运行身份。丢包或 API 失败时可使用 `Retry Jev`，没有本地备用控制器或决策超时。
+
+任务完成时，Unity 统一处理并发送一次 `mission_completed`，仅包含 version、session_id、episode_id、run_id 和实际完成 tick；请求和通知共用发送队列。Python 始终记录完成通知，`--exit-on-complete` 只控制是否退出。该通知不包含船状态，也不重发。
 
 参数面板的 `Decision mode` 当前固定为 `Paused`，模式选择禁用。`SimulationRunner.TrySetDecisionMode()` 预留未来设置入口，目前拒绝 `Continuous`；观测中的 `simulation_paused_while_deciding` 从当前模式读取。详细代码结构和运行说明见 [jev_api/README](../../jev_api/README.md)。
 
 ## 5. 日志与验证
 
-`--log` 记录原始 UDP `request`、实际 HTTP `payload`、`raw_response`、单动作 `result` 及 API 耗时。状态广播保留 `action_duration_s`；每条决策只对应一个动作。
+`--log` 记录原始 UDP `request`、实际 HTTP `payload`、`raw_response`、单动作 `result` 及 API 耗时；每条决策只对应一个动作。完成日志以 `event: completed` 和原始 `notification` 保存。
 
 客户端默认复用 HTTPS 连接及 SSLContext，保留系统/环境 HTTP 代理和证书校验，不自动重试 POST。连接失效会返回错误，使用现有 `Retry Jev` 流程；需使用原传输方式时加 `--http-transport urllib`。不支持复用的代理配置自动使用 urllib。UDP 结果检查间隔从 50 ms 调整为 10 ms，这部分不计入 HTTP 耗时。
 

@@ -1032,7 +1032,6 @@ MonoBehaviour:
   port: 5005
   targetAddress: 127.0.0.1
   targetPort: 5006
-  stateFrequency: 10
 --- !u!114 &1650423694
 MonoBehaviour:
   m_ObjectHideFlags: 0

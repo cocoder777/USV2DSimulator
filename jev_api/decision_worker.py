@@ -15,30 +15,6 @@ def identity(packet):
     return tuple(packet.get(field) for field in IDENTITY_FIELDS)
 
 
-def execute_decision(packet, settings, key, transport, received_at=None):
-    """观测 → 请求内容 → HTTPS → 动作。返回记录，由主线程统一打印和写日志。"""
-    started = time.monotonic()
-    received_at = started if received_at is None else received_at
-    timings = {"queue_s": started - received_at}
-    envelope = {field: packet[field] for field in IDENTITY_FIELDS}
-    envelope["version"] = PROTOCOL_VERSION
-    payload = raw = None
-    try:
-        payload = build_payload(packet["observation"], settings.model)
-        timings["build_payload_s"] = time.monotonic() - started
-        raw = transport.call(payload, key, settings.endpoint, timings, settings.http_transport)
-        mark = time.monotonic()
-        action = decode_action(raw)
-        timings["decode_action_s"] = time.monotonic() - mark
-        result = dict(envelope, type="decision_result", action=action,
-                      action_duration_s=packet["observation"]["planning"]["action_duration_s"])
-    except Exception as error:
-        result = dict(envelope, type="decision_error", error=f"{type(error).__name__}: {error}")
-    return {"event": "decision", "elapsed_s": time.monotonic() - received_at,
-            "worker": threading.current_thread().name, "timings": timings,
-            "request": packet, "payload": payload, "raw_response": raw, "result": result}
-
-
 class DecisionScheduler:
     """默认单工作线程；可增加并发数，但始终只保留一个最新待执行观测。"""
 
@@ -102,9 +78,32 @@ class DecisionScheduler:
         self.inflight[identity(packet)] = self.pool.submit(self._execute, packet, received_at)
 
     def _execute(self, packet, received_at):
-        return execute_decision(packet, self.settings, self.key, self.local.transport, received_at)
+        """在工作线程中：构造请求 → 调用 Jev → 解析动作，返回完整记录。"""
+        started = time.monotonic()
+        timings = {"queue_s": started - received_at}
+        envelope = {field: packet[field] for field in IDENTITY_FIELDS}
+        envelope["version"] = PROTOCOL_VERSION
+        payload = raw = None
+        try:
+            # 把当前帧的可用信息打包为jev能看懂的信息
+            payload = build_payload(packet["observation"], self.settings.model)
+            timings["build_payload_s"] = time.monotonic() - started
+            # 正式api请求，默认persistent，复用连接。返回结果后，raw是从响应 JSON 解析成的 Python 字典
+            raw = self.local.transport.call(payload, self.key, self.settings.endpoint,
+                                            timings, self.settings.http_transport)
+            mark = time.monotonic()
+            action = decode_action(raw)
+            timings["decode_action_s"] = time.monotonic() - mark
+            result = dict(envelope, type="decision_result", action=action,
+                          action_duration_s=packet["observation"]["planning"]["action_duration_s"])
+        except Exception as error:
+            result = dict(envelope, type="decision_error", error=f"{type(error).__name__}: {error}")
+        return {"event": "decision", "elapsed_s": time.monotonic() - received_at,
+                "worker": threading.current_thread().name, "timings": timings,
+                "request": packet, "payload": payload, "raw_response": raw, "result": result}
 
     def collect_results(self):
+        '''一个任务完成，腾出空位，启动之前的 pending'''
         records = []
         for request_id, future in list(self.inflight.items()):
             if future.done():

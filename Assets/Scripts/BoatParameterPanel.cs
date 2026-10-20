@@ -118,7 +118,12 @@ public class BoatParameterPanel : MonoBehaviour
 
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
         {
-            GUILayout.Label("Jev sets speed and heading instantly. Manual dynamics below do not apply.", hintStyle);
+            boat.speedResponseTime = DrawSlider("Speed transition time",
+                boat.speedResponseTime, 0f, 5f, "s");
+            boat.headingResponseTime = DrawSlider("Heading transition time", boat.headingResponseTime, 0f, 5f, "s");
+            if (GUILayout.Button("Instant heading (0 s)")) boat.headingResponseTime = 0;
+            if (GUILayout.Button("Instant speed (0 s)")) boat.speedResponseTime = 0;
+            GUILayout.Label("Speed ramps linearly. Heading turns smoothly and arrives with zero yaw. Each time is independent; 0 is instant.", hintStyle);
         }
         else
         {
@@ -171,10 +176,8 @@ public class BoatParameterPanel : MonoBehaviour
         }
 
         GUILayout.Space(4);
-        GUILayout.Label(
-            "Response = 0 means no input filtering.",
-            hintStyle
-        );
+        if (boat.Mode == BoatDynamics2D.ControlMode.Manual)
+            GUILayout.Label("Response = 0 means no input filtering.", hintStyle);
         GUILayout.Label(
             "W/S: accelerate   A/D: turn   R: reset boat",
             hintStyle
@@ -234,6 +237,8 @@ public class BoatParameterPanel : MonoBehaviour
 
         boat.accelerationTimeConstant = 0f;
         boat.angularAccelerationTimeConstant = 0f;
+        boat.speedResponseTime = 0.5f;
+        boat.headingResponseTime = 0.5f;
 
         boat.linearDamping = 0.2f;
         boat.angularDamping = 1.2f;

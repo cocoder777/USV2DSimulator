@@ -8,7 +8,7 @@ from choice_control import build_payload, decode_action
 from route_context import RouteContext
 from http_transport import JevTransport
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 9
 IDENTITY_FIELDS = ("session_id", "episode_id", "run_id", "decision_id", "tick")
 
 

@@ -17,6 +17,12 @@ public class BoatDynamics2D : MonoBehaviour
     {
         if (Mode == mode) return;
         Mode = mode;
+        navigationHeadingTarget = headingRad * Mathf.Rad2Deg;
+        headingTransitionRemaining = Mathf.Abs(yawRate) > 0 ? headingResponseTime : 0;
+        headingResponseDuration = headingResponseTime;
+        navigationSpeedTarget = speed;
+        navigationTransitionRemaining = 0;
+        navigationResponseDuration = speedResponseTime;
         RunId = System.Guid.NewGuid().ToString("N");
         ClearControl();
         ModeChanged?.Invoke();
@@ -33,15 +39,40 @@ public class BoatDynamics2D : MonoBehaviour
 
     public static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     public void ClearControl() { accelerationCommand = 0f; angularAccelerationCommand = 0f; }
-    // Jev navigation targets are instantaneous in v1; manual acceleration dynamics remain separate.
+    [Header("Jev 航速响应")]
+    [Min(0)] public float speedResponseTime = 0.5f;
+    [Min(0)] public float headingResponseTime = 0.5f;
+    private float navigationHeadingTarget, headingTransitionRemaining, headingResponseDuration;
+    public float HeadingTargetOffset => navigationHeadingTarget - headingRad * Mathf.Rad2Deg;
+    public float HeadingTransitionRemaining => headingResponseTime == headingResponseDuration
+        ? headingTransitionRemaining : headingResponseTime;
+    private float navigationSpeedTarget;
+    private float navigationTransitionRemaining, navigationResponseDuration;
+    public float NavigationTargetSpeed => navigationSpeedTarget;
+    public float SpeedTransitionRemaining => speedResponseTime == navigationResponseDuration
+        ? navigationTransitionRemaining : speedResponseTime;
+
+    // Speed ramps linearly; heading uses a cubic with continuous yaw and zero yaw at arrival.
     public void SetNavigationTarget(float targetSpeed, float targetHeadingDeg)
     {
-        if (!IsFinite(targetSpeed) || !IsFinite(targetHeadingDeg))
+        if (!IsFinite(targetSpeed) || !IsFinite(targetHeadingDeg)
+            || !IsFinite(speedResponseTime) || speedResponseTime < 0
+            || !IsFinite(headingResponseTime) || headingResponseTime < 0)
             throw new System.ArgumentException("Navigation target must be finite.");
-        speed = Mathf.Clamp(targetSpeed, -maxReverseSpeed, maxForwardSpeed);
-        headingRad = targetHeadingDeg * Mathf.Deg2Rad;
-        yawRate = 0;
-        actualAcceleration = actualAngularAcceleration = 0;
+        targetSpeed = Mathf.Clamp(targetSpeed, -maxReverseSpeed, maxForwardSpeed);
+        if (targetSpeed != navigationSpeedTarget || speedResponseTime != navigationResponseDuration)
+        {
+            navigationSpeedTarget = targetSpeed;
+            navigationTransitionRemaining = speedResponseTime;
+            navigationResponseDuration = speedResponseTime;
+        }
+        if (Mathf.Abs(Mathf.DeltaAngle(navigationHeadingTarget, targetHeadingDeg)) > 0.0001f
+            || headingResponseDuration != headingResponseTime)
+        {
+            navigationHeadingTarget = headingRad * Mathf.Rad2Deg + Mathf.DeltaAngle(HeadingDeg, targetHeadingDeg);
+            headingTransitionRemaining = headingResponseTime;
+            headingResponseDuration = headingResponseTime;
+        }
         ClearControl();
     }
     [Header("运动限制")]
@@ -126,6 +157,7 @@ public class BoatDynamics2D : MonoBehaviour
         // Parameter changes take effect on an already held command too.
         SetControl(accelerationCommand, angularAccelerationCommand * Mathf.Rad2Deg);
 
+        Vector2 displacement;
         if (Mode == ControlMode.Manual)
         {
             (speed, actualAcceleration) = BoatScalarDynamics.Step(speed, actualAcceleration, accelerationCommand,
@@ -136,13 +168,49 @@ public class BoatDynamics2D : MonoBehaviour
 
             // 4. 积分得到航向角
             headingRad += yawRate * dt;
+            displacement = new Vector2(Mathf.Cos(headingRad), Mathf.Sin(headingRad)) * speed * dt;
+        }
+        else
+        {
+            float oldSpeed = Mathf.Clamp(speed, -maxReverseSpeed, maxForwardSpeed);
+            float targetSpeed = Mathf.Clamp(navigationSpeedTarget, -maxReverseSpeed, maxForwardSpeed);
+            float remaining = navigationTransitionRemaining;
+            float turnRemaining = headingTransitionRemaining;
+            float oldYaw = yawRate;
+            float initialHeading = headingRad * Mathf.Rad2Deg;
+            float delta = navigationHeadingTarget - initialHeading;
+            // Simpson integration at the same five samples used by Python's option descriptions.
+            Vector2 Velocity(float t)
+            {
+                float v = NavigationSpeed(oldSpeed, targetSpeed, remaining, t);
+                var turn = NavigationTurn(delta, oldYaw * Mathf.Rad2Deg, turnRemaining, t);
+                float angle = (initialHeading + turn.angle) * Mathf.Deg2Rad;
+                return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * v;
+            }
+            displacement = Vector2.zero;
+            float[] boundaries = { 0, dt, Mathf.Min(dt, remaining), Mathf.Min(dt, turnRemaining) };
+            System.Array.Sort(boundaries);
+            for (int i = 1; i < boundaries.Length; i++)
+            {
+                float start = boundaries[i - 1], span = boundaries[i] - start;
+                if (span <= 0) continue;
+                displacement += (Velocity(start) + 4 * Velocity(start + span / 4)
+                    + 2 * Velocity(start + span / 2) + 4 * Velocity(start + 3 * span / 4)
+                    + Velocity(start + span)) * (span / 12);
+            }
+            speed = NavigationSpeed(oldSpeed, targetSpeed, remaining, dt);
+            var endTurn = NavigationTurn(delta, oldYaw * Mathf.Rad2Deg, turnRemaining, dt);
+            headingRad = (initialHeading + endTurn.angle) * Mathf.Deg2Rad;
+            yawRate = endTurn.yaw * Mathf.Deg2Rad;
+            navigationTransitionRemaining = Mathf.Max(0, remaining - dt);
+            headingTransitionRemaining = Mathf.Max(0, turnRemaining - dt);
+            if (navigationTransitionRemaining < 0.000001f) navigationTransitionRemaining = 0;
+            if (headingTransitionRemaining < 0.000001f) headingTransitionRemaining = 0;
+            actualAcceleration = (speed - oldSpeed) / dt;
+            actualAngularAcceleration = (yawRate - oldYaw) / dt;
         }
 
-        // 5. 根据船头方向更新二维位置
-        float dx = Mathf.Cos(headingRad) * speed * dt;
-        float dy = Mathf.Sin(headingRad) * speed * dt;
-
-        position += new Vector2(dx, dy);
+        position += displacement;
 
         // 6. 更新 Unity 中的船体
         transform.position = new Vector3(
@@ -152,6 +220,22 @@ public class BoatDynamics2D : MonoBehaviour
         transform.rotation = Quaternion.Euler(
             0f, 0f, headingRad * Mathf.Rad2Deg
         );
+    }
+
+    public static float NavigationSpeed(float initial, float target, float remaining, float t)
+    {
+        return remaining <= 0 || t >= remaining ? target : initial + (target - initial) * (t / remaining);
+    }
+
+    // Cubic Hermite: start at the measured heading/yaw, arrive at target with zero yaw.
+    // A restricted tail of the same cubic is reconstructed each step, so continuing does not reset it.
+    public static (float angle, float yaw) NavigationTurn(float delta, float initialYaw, float remaining, float t)
+    {
+        if (remaining <= 0 || t >= remaining) return (delta, 0);
+        float u = t / remaining;
+        float angle = (-2*u*u*u + 3*u*u)*delta + (u*u*u - 2*u*u + u)*remaining*initialYaw;
+        float yaw = ((-6*u*u + 6*u)*delta + (3*u*u - 4*u + 1)*remaining*initialYaw) / remaining;
+        return (angle, yaw);
     }
 
     public void ResetBoat()
@@ -164,6 +248,12 @@ public class BoatDynamics2D : MonoBehaviour
         headingRad = startHeadingRad;
 
         speed = startSpeed;
+        navigationHeadingTarget = headingRad * Mathf.Rad2Deg;
+        headingTransitionRemaining = Mathf.Abs(startYawRate) > 0 ? headingResponseTime : 0;
+        headingResponseDuration = headingResponseTime;
+        navigationSpeedTarget = startSpeed;
+        navigationTransitionRemaining = 0;
+        navigationResponseDuration = speedResponseTime;
         yawRate = startYawRate;
 
         actualAcceleration = 0f;

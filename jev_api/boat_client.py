@@ -29,6 +29,25 @@ def valid_request(packet):
             return False
         if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
             return False
+        transition_time = obs['response']['speed_transition_time_s']
+        speed = obs['boat']['speed_mps']
+        if (type(transition_time) not in (int, float) or not math.isfinite(transition_time) or transition_time < 0
+                or type(speed) not in (int, float) or not math.isfinite(speed)):
+            return False
+        for field in ('active_target_speed_mps', 'remaining_transition_s'):
+            value = obs['response'][field]
+            if type(value) not in (int, float) or not math.isfinite(value):
+                return False
+        if obs['response']['remaining_transition_s'] < 0:
+            return False
+        for value in (obs['heading_response']['transition_time_s'],
+                      obs['heading_response']['active_target_offset_deg'],
+                      obs['heading_response']['remaining_transition_s'], obs['boat']['yaw_rate_deg_s'],obs['fixed_dt_s']):
+            if type(value) not in (int,float) or not math.isfinite(value):
+                return False
+        if (obs['heading_response']['transition_time_s'] < 0
+                or obs['heading_response']['remaining_transition_s'] < 0 or obs['fixed_dt_s'] <= 0):
+            return False
         return (len(obs["action_space"]["speeds_mps"]) == 8
                 and len(obs["action_space"]["heading_offsets_deg"]) == 8
                 and obs["task"]["planWaypointNum"] == len(obs["task"]["planWaypointList"]))

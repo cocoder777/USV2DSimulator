@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Newtonsoft.Json.Linq;
 
 public static class ObservationBuilder
@@ -26,7 +26,14 @@ public static class ObservationBuilder
             ["action_space"] = new JObject { ["speeds_mps"] = speeds,
                 ["heading_offsets_deg"] = new JArray(DiscreteAction.HeadingOffsetsDeg) },
             ["boat"] = new JObject { ["lon_lat"] = LonLat(boat.Position.x, boat.Position.y),
-                ["heading_deg"] = boat.HeadingDeg },
+                ["heading_deg"] = boat.HeadingDeg, ["speed_mps"] = boat.Speed, ["yaw_rate_deg_s"] = boat.YawRateDeg },
+            ["response"] = new JObject { ["speed_transition_time_s"] = boat.speedResponseTime,
+                ["active_target_speed_mps"] = boat.NavigationTargetSpeed,
+                ["remaining_transition_s"] = boat.SpeedTransitionRemaining },
+            ["heading_response"] = new JObject { ["transition_time_s"] = boat.headingResponseTime,
+                ["active_target_offset_deg"] = boat.HeadingTargetOffset,
+                ["remaining_transition_s"] = boat.HeadingTransitionRemaining },
+            ["fixed_dt_s"] = UnityEngine.Time.fixedDeltaTime,
             ["task"] = new JObject {
                 ["planRouteNum"] = mission.MapLevel, ["route_id"] = route.route_id,
                 ["currentRoute"] = Math.Max(0, mission.Progress.NextIndex - 1),

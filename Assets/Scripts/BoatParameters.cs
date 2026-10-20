@@ -6,6 +6,7 @@ public sealed class BoatParameters
     public float max_forward_speed, max_reverse_speed, max_acceleration;
     public float max_angular_acceleration_deg, max_yaw_rate_deg;
     public float acceleration_time_constant, angular_acceleration_time_constant;
+    public float speed_response_time_s, heading_response_time_s;
     public float linear_damping, angular_damping, fixed_dt;
 
     public static BoatParameters Capture(BoatDynamics2D boat) => new BoatParameters {
@@ -13,6 +14,7 @@ public sealed class BoatParameters
         max_acceleration = boat.maxAcceleration, max_angular_acceleration_deg = boat.maxAngularAccelerationDeg,
         max_yaw_rate_deg = boat.maxYawRateDeg, acceleration_time_constant = boat.accelerationTimeConstant,
         angular_acceleration_time_constant = boat.angularAccelerationTimeConstant,
+        speed_response_time_s = boat.speedResponseTime, heading_response_time_s = boat.headingResponseTime,
         linear_damping = boat.linearDamping, angular_damping = boat.angularDamping,
         fixed_dt = UnityEngine.Time.fixedDeltaTime
     };

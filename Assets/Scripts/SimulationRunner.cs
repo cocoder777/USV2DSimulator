@@ -11,7 +11,7 @@ public sealed class SimulationRunner : MonoBehaviour
     public DecisionTimingMode DecisionMode { get; private set; } = DecisionTimingMode.Paused;
     public bool PauseWhileDeciding => DecisionMode == DecisionTimingMode.Paused;
     public bool CanChangeDecisionMode => false;
-    public const int ProtocolVersion = 6;
+    public const int ProtocolVersion = 9;
     public bool JevStarted { get; private set; }
     [Min(0.02f)] public float actionDuration = 0.4f;
     public RunState State { get; private set; } = RunState.Initializing;

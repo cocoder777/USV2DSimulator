@@ -6,7 +6,7 @@ import time
 
 from choice_control import build_payload, decode_action
 from route_context import RouteContext
-from http_transport import JevTransport
+from tools.http_transport import JevTransport
 
 PROTOCOL_VERSION = 9
 IDENTITY_FIELDS = ("session_id", "episode_id", "run_id", "decision_id", "tick")
@@ -89,7 +89,8 @@ class DecisionScheduler:
         try:
             # 把当前帧的可用信息打包为jev能看懂的信息
             payload = build_payload(packet["observation"], self.settings.model,
-                                    self.local.route_context, identity(packet)[:3])
+                                    self.local.route_context, identity(packet)[:3],
+                                    tracking_preference_m=self.settings.tracking_preference_m)
             timings["build_payload_s"] = time.monotonic() - started
             # 正式api请求，默认persistent，复用连接。返回结果后，raw是从响应 JSON 解析成的 Python 字典
             raw = self.local.transport.call(payload, self.key, self.settings.endpoint,

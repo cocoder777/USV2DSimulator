@@ -5,6 +5,7 @@ import math
 import socket
 
 from decision_worker import DecisionScheduler, IDENTITY_FIELDS, PROTOCOL_VERSION
+from choice_control import DEFAULT_TRACKING_PREFERENCE_M
 
 API_KEY = 'apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141'
 MAX_PACKET = 65000
@@ -165,11 +166,15 @@ def main():
                         help="Reuse HTTPS connections (default), or use the original urllib transport")
     parser.add_argument("--workers", type=int, default=1,
                         help="Concurrent API calls; default 1 for the paused simulation")
+    parser.add_argument("--tracking-preference-m", type=float, default=DEFAULT_TRACKING_PREFERENCE_M,
+                        help="Preferred reference tracking distance in model instructions; does not change arrival radius")
     parser.add_argument("--log")
     parser.add_argument("--exit-on-complete", action="store_true")
     settings = parser.parse_args()
     if any(not 1 <= p <= 65535 for p in (settings.port, settings.listen_port)):
         parser.error("Ports must be 1..65535")
+    if not math.isfinite(settings.tracking_preference_m) or settings.tracking_preference_m <= 0:
+        parser.error("Tracking preference must be finite and positive")
     if settings.workers < 1:
         parser.error("Workers must be positive")
     try:

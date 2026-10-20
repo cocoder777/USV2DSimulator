@@ -5,9 +5,10 @@ import threading
 import time
 
 from choice_control import build_payload, decode_action
+from route_context import RouteContext
 from http_transport import JevTransport
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 IDENTITY_FIELDS = ("session_id", "episode_id", "run_id", "decision_id", "tick")
 
 
@@ -35,6 +36,7 @@ class DecisionScheduler:
     def _init_worker(self):
         # HTTPSConnection 不能被多个线程同时使用，每个线程独立复用自己的连接。
         self.local.transport = self.transport_factory()
+        self.local.route_context = RouteContext()
         with self.transport_lock:
             self.transports.append(self.local.transport)
 
@@ -86,7 +88,8 @@ class DecisionScheduler:
         payload = raw = None
         try:
             # 把当前帧的可用信息打包为jev能看懂的信息
-            payload = build_payload(packet["observation"], self.settings.model)
+            payload = build_payload(packet["observation"], self.settings.model,
+                                    self.local.route_context, identity(packet)[:3])
             timings["build_payload_s"] = time.monotonic() - started
             # 正式api请求，默认persistent，复用连接。返回结果后，raw是从响应 JSON 解析成的 Python 字典
             raw = self.local.transport.call(payload, self.key, self.settings.endpoint,

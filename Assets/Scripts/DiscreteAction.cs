@@ -3,21 +3,23 @@ using System;
 [Serializable]
 public sealed class DiscreteBoatAction
 {
-    public int acceleration_index;
-    public int turn_index;
+    public int speed_index;
+    public int heading_index;
 }
 
 // Wire contract shared with Python. No HTTP or model code.
 public static class DiscreteAction
 {
-    public static readonly float[] AccelerationFractions = { -1f, -2f / 3, -1f / 3, 0, 0.25f, 0.5f, 0.75f, 1f };
-    public static readonly float[] TurnFractions = { -1f, -0.5f, -0.25f, 0, 0.25f, 0.5f, 1f };
+    public static readonly float[] SpeedFractions = { -1f, -0.5f, 0, 0.1f, 0.25f, 0.5f, 0.75f, 1f };
+    public static readonly float[] HeadingOffsetsDeg = { 0, 45, 90, 135, 180, -135, -90, -45 };
     public static void Validate(DiscreteBoatAction action)
     {
-        if (action == null || action.acceleration_index < 0 || action.acceleration_index >= 8
-            || action.turn_index < 0 || action.turn_index >= 7)
-            throw new FormatException("Expected acceleration_index 0..7 and turn_index 0..6.");
+        if (action == null || action.speed_index < 0 || action.speed_index >= 8
+            || action.heading_index < 0 || action.heading_index >= 8)
+            throw new FormatException("Expected speed_index and heading_index in 0..7.");
     }
+    public static float Speed(int index, BoatDynamics2D boat) => SpeedFractions[index]
+        * (SpeedFractions[index] < 0 ? boat.maxReverseSpeed : boat.maxForwardSpeed);
     public static int Steps(float duration, float dt)
     {
         if (!BoatDynamics2D.IsFinite(duration) || !BoatDynamics2D.IsFinite(dt) || dt <= 0 || duration <= 0)

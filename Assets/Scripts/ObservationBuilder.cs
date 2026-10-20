@@ -1,39 +1,39 @@
-using System;
+﻿using System;
 using Newtonsoft.Json.Linq;
 
 public static class ObservationBuilder
 {
-    // Only measured state, current target and plant parameters; reference curves are for display/export.
+    // Synthetic small-area geographic frame: Unity +X east, +Y north, 1 unit = 1 metre.
+    public const double OriginLon = 120.5, OriginLat = 30.2, EarthRadius = 6378137;
+    private static JArray LonLat(double x, double y) => new JArray(
+        Math.Round(OriginLon + x / (EarthRadius * Math.Cos(OriginLat * Math.PI / 180)) * 180 / Math.PI, 8),
+        Math.Round(OriginLat + y / EarthRadius * 180 / Math.PI, 8));
+
     public static JObject ForModel(BoatDynamics2D boat, MissionManager mission, float actionDuration = 0.4f)
     {
-        if (mission?.Route == null) throw new InvalidOperationException("No task loaded.");
-        var target = mission.Progress.Next;
-        if (target == null) throw new InvalidOperationException("No current target.");
-        var parameters = JObject.FromObject(BoatParameters.Capture(boat));
-        parameters.Remove("fixed_dt");
-        parameters.Remove("acceleration_time_constant");
-        parameters.Remove("angular_acceleration_time_constant");
-        bool pauseWhileDeciding = boat.GetComponent<SimulationRunner>()?.PauseWhileDeciding ?? true;
+        if (mission?.Route == null || mission.Progress.Next == null)
+            throw new InvalidOperationException("No active task.");
+        var route = mission.Route;
+        var samples = new JArray();
+        foreach (var p in route.GetReferenceSamples()) samples.Add(LonLat(p.x, p.y));
+        var waypoints = new JArray();
+        foreach (var p in route.waypoints) waypoints.Add(LonLat(p.x, p.y));
+        var speeds = new JArray();
+        for (int i = 0; i < 8; i++) speeds.Add(DiscreteAction.Speed(i, boat));
         return new JObject {
-            ["coordinates"] = "Global XY in metres. Heading in degrees: 0=east, 90=north; counterclockwise positive.",
             ["planning"] = new JObject { ["action_duration_s"] = actionDuration,
-                ["simulation_paused_while_deciding"] = pauseWhileDeciding },
-            ["action_space"] = new JObject {
-                ["acceleration_fractions"] = new JArray(DiscreteAction.AccelerationFractions),
-                ["turn_fractions"] = new JArray(DiscreteAction.TurnFractions) },
-            ["boat"] = new JObject { ["position_xy_m"] = new JArray(boat.Position.x, boat.Position.y),
-                ["heading_deg"] = boat.HeadingDeg, ["speed_mps"] = boat.Speed, ["yaw_rate_deg_s"] = boat.YawRateDeg },
-            ["target"] = new JObject { ["position_xy_m"] = new JArray(target.x, target.y),
-                ["arrival_radius_m"] = mission.Route.arrival_radius_m,
-                ["requires_stop"] = mission.Progress.NextIndex == mission.Route.waypoints.Length - 1,
-                ["stop_speed_mps"] = mission.Route.stop_speed_mps },
-            ["dynamics"] = parameters,
-            ["motion"] = "Acceleration commands take effect immediately when simulation resumes. "
-                + "Speed derivative = longitudinal command - linear damping * speed; "
-                + "yaw-rate derivative = angular command - angular damping * yaw rate. "
-                + "Yaw rate changes heading; signed speed moves the boat along its changing heading, with no independent sideways drift. "
-                + "The target is fixed in the world; its boat-relative coordinates change as the boat moves and turns. "
-                + "Speeds are clamped to their limits. Zero commands allow damping to slow motion; they do not stop it instantly."
+                ["simulation_paused_while_deciding"] = true },
+            ["action_space"] = new JObject { ["speeds_mps"] = speeds,
+                ["heading_offsets_deg"] = new JArray(DiscreteAction.HeadingOffsetsDeg) },
+            ["boat"] = new JObject { ["lon_lat"] = LonLat(boat.Position.x, boat.Position.y),
+                ["heading_deg"] = boat.HeadingDeg },
+            ["task"] = new JObject {
+                ["planRouteNum"] = mission.MapLevel, ["route_id"] = route.route_id,
+                ["currentRoute"] = Math.Max(0, mission.Progress.NextIndex - 1),
+                ["next_waypoint_index"] = mission.Progress.NextIndex,
+                ["planWaypointNum"] = route.waypoints.Length, ["planWaypointList"] = waypoints,
+                ["reference_lon_lat"] = samples, ["origin_lon_lat"] = new JArray(OriginLon, OriginLat),
+                ["arrival_radius_m"] = route.arrival_radius_m, ["stop_speed_mps"] = route.stop_speed_mps }
         };
     }
 }

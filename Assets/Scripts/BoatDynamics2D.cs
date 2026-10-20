@@ -33,6 +33,17 @@ public class BoatDynamics2D : MonoBehaviour
 
     public static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
     public void ClearControl() { accelerationCommand = 0f; angularAccelerationCommand = 0f; }
+    // Jev navigation targets are instantaneous in v1; manual acceleration dynamics remain separate.
+    public void SetNavigationTarget(float targetSpeed, float targetHeadingDeg)
+    {
+        if (!IsFinite(targetSpeed) || !IsFinite(targetHeadingDeg))
+            throw new System.ArgumentException("Navigation target must be finite.");
+        speed = Mathf.Clamp(targetSpeed, -maxReverseSpeed, maxForwardSpeed);
+        headingRad = targetHeadingDeg * Mathf.Deg2Rad;
+        yawRate = 0;
+        actualAcceleration = actualAngularAcceleration = 0;
+        ClearControl();
+    }
     [Header("运动限制")]
     public float maxAcceleration = 1.5f;
     public float maxForwardSpeed = 5f;
@@ -115,14 +126,17 @@ public class BoatDynamics2D : MonoBehaviour
         // Parameter changes take effect on an already held command too.
         SetControl(accelerationCommand, angularAccelerationCommand * Mathf.Rad2Deg);
 
-        (speed, actualAcceleration) = BoatScalarDynamics.Step(speed, actualAcceleration, accelerationCommand,
-            accelerationTimeConstant, linearDamping, dt, -maxReverseSpeed, maxForwardSpeed);
-        (yawRate, actualAngularAcceleration) = BoatScalarDynamics.Step(yawRate, actualAngularAcceleration,
-            angularAccelerationCommand, angularAccelerationTimeConstant, angularDamping, dt,
-            -maxYawRateDeg * Mathf.Deg2Rad, maxYawRateDeg * Mathf.Deg2Rad);
+        if (Mode == ControlMode.Manual)
+        {
+            (speed, actualAcceleration) = BoatScalarDynamics.Step(speed, actualAcceleration, accelerationCommand,
+                accelerationTimeConstant, linearDamping, dt, -maxReverseSpeed, maxForwardSpeed);
+            (yawRate, actualAngularAcceleration) = BoatScalarDynamics.Step(yawRate, actualAngularAcceleration,
+                angularAccelerationCommand, angularAccelerationTimeConstant, angularDamping, dt,
+                -maxYawRateDeg * Mathf.Deg2Rad, maxYawRateDeg * Mathf.Deg2Rad);
 
-        // 4. 积分得到航向角
-        headingRad += yawRate * dt;
+            // 4. 积分得到航向角
+            headingRad += yawRate * dt;
+        }
 
         // 5. 根据船头方向更新二维位置
         float dx = Mathf.Cos(headingRad) * speed * dt;

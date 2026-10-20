@@ -1,0 +1,114 @@
+{
+  "model": "jev-latest",
+  "state": {
+    "route": {
+      "nearest_point_forward_left_m": [
+        0.0,
+        0.0
+      ],
+      "cross_track_distance_m": 0.0,
+      "ahead_points_forward_left_m": [
+        [
+          1.0,
+          0.0
+        ],
+        [
+          2.0,
+          0.0
+        ],
+        [
+          3.0,
+          0.0
+        ],
+        [
+          4.0,
+          0.0
+        ],
+        [
+          6.0,
+          0.0
+        ]
+      ]
+    },
+    "target": {
+      "forward_left_m": [
+        10.0,
+        0.0
+      ],
+      "arrival_radius_m": 1
+    },
+    "action_duration_s": 0.4
+  },
+  "questions": {
+    "action": {
+      "type": "choice",
+      "instructions": "Follow the ordered reference route closely while making forward progress through the CURRENT checkpoint. Coordinates are [forward metres, left metres] relative to the boat at sampling: [+,0] ahead, [0,+] LEFT, [0,-] RIGHT. The ordered ahead route points describe the upcoming dashed route, not separate checkpoints. Stay near that curve throughout the movement; do not shortcut bends just to reach a distant checkpoint. Enter the current checkpoint circle before proceeding to later route points. Choose ONE speed/course pair. This is NOT angular acceleration or a turn rate: heading changes INSTANTLY by the option angle relative to the CURRENT bow, once, then stays fixed for the whole interval. Positive angles turn LEFT; negative angles turn RIGHT. Speed is also set instantly with no inertia or damping. Each option states the resulting end position in CURRENT boat coordinates. Positive speed travels along the NEW bow; negative speed travels opposite the NEW bow. Prefer positive speed when equivalent movement is available. Compare the movement segment with the nearby route and current checkpoint. Use a smaller nonzero speed near sharp bends or when a full step would overshoot. Do not choose stop merely because you are on the route or inside an intermediate checkpoint; continue making progress. Judge LEFT versus RIGHT using the signs in the CURRENT coordinate frame, even after the last action changed the boat heading. For example, nearby route points [1,0],[2,0] call for ahead motion, NOT another turn; [1,1],[2,2] call for ahead-LEFT, while [1,-1],[2,-2] call for ahead-RIGHT. Follow the NEAR portion (roughly the next 1-2 metres) first; the far checkpoint does not justify departing from that portion. If already close to the route, do not create a large sideways deviation. When the curve is between the available directions, alternate short movements rather than long zigzags. Prefer smaller displacement over a move that leaves the curve by about a metre. At the final target, stop immediately if already inside the arrival circle; there is no need to reach its exact centre. The CURRENT target is an intermediate CHECKPOINT: entering its circle is sufficient; no stop is required.",
+      "criteria": {
+        "reverse_full__ahead": "Set speed=-1 m/s; new bow offset=+0 deg. End position [forward,left]=[-0.400,0.000] m. Moves BEHIND in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_full__ahead_left": "Set speed=-1 m/s; new bow offset=+45 deg. End position [forward,left]=[-0.283,-0.283] m. Moves BEHIND RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_full__left": "Set speed=-1 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,-0.400] m. Moves RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_full__behind_left": "Set speed=-1 m/s; new bow offset=+135 deg. End position [forward,left]=[0.283,-0.283] m. Moves AHEAD RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_full__behind": "Set speed=-1 m/s; new bow offset=+180 deg. End position [forward,left]=[0.400,0.000] m. Moves AHEAD in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_full__behind_right": "Set speed=-1 m/s; new bow offset=-135 deg. End position [forward,left]=[0.283,0.283] m. Moves AHEAD LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_full__right": "Set speed=-1 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,0.400] m. Moves LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_full__ahead_right": "Set speed=-1 m/s; new bow offset=-45 deg. End position [forward,left]=[-0.283,0.283] m. Moves BEHIND LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.400 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__ahead": "Set speed=-0.5 m/s; new bow offset=+0 deg. End position [forward,left]=[-0.200,0.000] m. Moves BEHIND in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__ahead_left": "Set speed=-0.5 m/s; new bow offset=+45 deg. End position [forward,left]=[-0.141,-0.141] m. Moves BEHIND RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__left": "Set speed=-0.5 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,-0.200] m. Moves RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__behind_left": "Set speed=-0.5 m/s; new bow offset=+135 deg. End position [forward,left]=[0.141,-0.141] m. Moves AHEAD RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__behind": "Set speed=-0.5 m/s; new bow offset=+180 deg. End position [forward,left]=[0.200,0.000] m. Moves AHEAD in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__behind_right": "Set speed=-0.5 m/s; new bow offset=-135 deg. End position [forward,left]=[0.141,0.141] m. Moves AHEAD LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__right": "Set speed=-0.5 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,0.200] m. Moves LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "reverse_half__ahead_right": "Set speed=-0.5 m/s; new bow offset=-45 deg. End position [forward,left]=[-0.141,0.141] m. Moves BEHIND LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "stop__ahead": "Set speed=0 m/s; new bow offset=+0 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "stop__ahead_left": "Set speed=0 m/s; new bow offset=+45 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "stop__left": "Set speed=0 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "stop__behind_left": "Set speed=0 m/s; new bow offset=+135 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "stop__behind": "Set speed=0 m/s; new bow offset=+180 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "stop__behind_right": "Set speed=0 m/s; new bow offset=-135 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "stop__right": "Set speed=0 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "stop__ahead_right": "Set speed=0 m/s; new bow offset=-45 deg. End position [forward,left]=[0.000,0.000] m. STOP: suitable only when already inside the final parking circle. Travel distance=0.000 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__ahead": "Set speed=0.5 m/s; new bow offset=+0 deg. End position [forward,left]=[0.200,0.000] m. Moves AHEAD in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__ahead_left": "Set speed=0.5 m/s; new bow offset=+45 deg. End position [forward,left]=[0.141,0.141] m. Moves AHEAD LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__left": "Set speed=0.5 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,0.200] m. Moves LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__behind_left": "Set speed=0.5 m/s; new bow offset=+135 deg. End position [forward,left]=[-0.141,0.141] m. Moves BEHIND LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__behind": "Set speed=0.5 m/s; new bow offset=+180 deg. End position [forward,left]=[-0.200,0.000] m. Moves BEHIND in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__behind_right": "Set speed=0.5 m/s; new bow offset=-135 deg. End position [forward,left]=[-0.141,-0.141] m. Moves BEHIND RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__right": "Set speed=0.5 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,-0.200] m. Moves RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_slow__ahead_right": "Set speed=0.5 m/s; new bow offset=-45 deg. End position [forward,left]=[0.141,-0.141] m. Moves AHEAD RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.200 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__ahead": "Set speed=1.25 m/s; new bow offset=+0 deg. End position [forward,left]=[0.500,0.000] m. Moves AHEAD in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__ahead_left": "Set speed=1.25 m/s; new bow offset=+45 deg. End position [forward,left]=[0.354,0.354] m. Moves AHEAD LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__left": "Set speed=1.25 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,0.500] m. Moves LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__behind_left": "Set speed=1.25 m/s; new bow offset=+135 deg. End position [forward,left]=[-0.354,0.354] m. Moves BEHIND LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__behind": "Set speed=1.25 m/s; new bow offset=+180 deg. End position [forward,left]=[-0.500,0.000] m. Moves BEHIND in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__behind_right": "Set speed=1.25 m/s; new bow offset=-135 deg. End position [forward,left]=[-0.354,-0.354] m. Moves BEHIND RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__right": "Set speed=1.25 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,-0.500] m. Moves RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_quarter__ahead_right": "Set speed=1.25 m/s; new bow offset=-45 deg. End position [forward,left]=[0.354,-0.354] m. Moves AHEAD RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=0.500 m. This movement must stay near the route throughout the interval.",
+        "forward_half__ahead": "Set speed=2.5 m/s; new bow offset=+0 deg. End position [forward,left]=[1.000,0.000] m. Moves AHEAD in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_half__ahead_left": "Set speed=2.5 m/s; new bow offset=+45 deg. End position [forward,left]=[0.707,0.707] m. Moves AHEAD LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_half__left": "Set speed=2.5 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,1.000] m. Moves LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_half__behind_left": "Set speed=2.5 m/s; new bow offset=+135 deg. End position [forward,left]=[-0.707,0.707] m. Moves BEHIND LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_half__behind": "Set speed=2.5 m/s; new bow offset=+180 deg. End position [forward,left]=[-1.000,0.000] m. Moves BEHIND in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_half__behind_right": "Set speed=2.5 m/s; new bow offset=-135 deg. End position [forward,left]=[-0.707,-0.707] m. Moves BEHIND RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_half__right": "Set speed=2.5 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,-1.000] m. Moves RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_half__ahead_right": "Set speed=2.5 m/s; new bow offset=-45 deg. End position [forward,left]=[0.707,-0.707] m. Moves AHEAD RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.000 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__ahead": "Set speed=3.75 m/s; new bow offset=+0 deg. End position [forward,left]=[1.500,0.000] m. Moves AHEAD in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__ahead_left": "Set speed=3.75 m/s; new bow offset=+45 deg. End position [forward,left]=[1.061,1.061] m. Moves AHEAD LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__left": "Set speed=3.75 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,1.500] m. Moves LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__behind_left": "Set speed=3.75 m/s; new bow offset=+135 deg. End position [forward,left]=[-1.061,1.061] m. Moves BEHIND LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__behind": "Set speed=3.75 m/s; new bow offset=+180 deg. End position [forward,left]=[-1.500,0.000] m. Moves BEHIND in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__behind_right": "Set speed=3.75 m/s; new bow offset=-135 deg. End position [forward,left]=[-1.061,-1.061] m. Moves BEHIND RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__right": "Set speed=3.75 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,-1.500] m. Moves RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_three_quarters__ahead_right": "Set speed=3.75 m/s; new bow offset=-45 deg. End position [forward,left]=[1.061,-1.061] m. Moves AHEAD RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=1.500 m. This movement must stay near the route throughout the interval.",
+        "forward_full__ahead": "Set speed=5 m/s; new bow offset=+0 deg. End position [forward,left]=[2.000,0.000] m. Moves AHEAD in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval.",
+        "forward_full__ahead_left": "Set speed=5 m/s; new bow offset=+45 deg. End position [forward,left]=[1.414,1.414] m. Moves AHEAD LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval.",
+        "forward_full__left": "Set speed=5 m/s; new bow offset=+90 deg. End position [forward,left]=[0.000,2.000] m. Moves LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval.",
+        "forward_full__behind_left": "Set speed=5 m/s; new bow offset=+135 deg. End position [forward,left]=[-1.414,1.414] m. Moves BEHIND LEFT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval.",
+        "forward_full__behind": "Set speed=5 m/s; new bow offset=+180 deg. End position [forward,left]=[-2.000,0.000] m. Moves BEHIND in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval.",
+        "forward_full__behind_right": "Set speed=5 m/s; new bow offset=-135 deg. End position [forward,left]=[-1.414,-1.414] m. Moves BEHIND RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval.",
+        "forward_full__right": "Set speed=5 m/s; new bow offset=-90 deg. End position [forward,left]=[0.000,-2.000] m. Moves RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval.",
+        "forward_full__ahead_right": "Set speed=5 m/s; new bow offset=-45 deg. End position [forward,left]=[1.414,-1.414] m. Moves AHEAD RIGHT in the CURRENT frame. Use when the NEAR route continues in that direction. Travel distance=2.000 m. This movement must stay near the route throughout the interval."
+      }
+    }
+  }
+}

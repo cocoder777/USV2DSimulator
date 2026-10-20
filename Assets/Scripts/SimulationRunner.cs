@@ -11,7 +11,7 @@ public sealed class SimulationRunner : MonoBehaviour
     public DecisionTimingMode DecisionMode { get; private set; } = DecisionTimingMode.Paused;
     public bool PauseWhileDeciding => DecisionMode == DecisionTimingMode.Paused;
     public bool CanChangeDecisionMode => false;
-    public const int ProtocolVersion = 5;
+    public const int ProtocolVersion = 6;
     public bool JevStarted { get; private set; }
     [Min(0.02f)] public float actionDuration = 0.4f;
     public RunState State { get; private set; } = RunState.Initializing;
@@ -120,7 +120,7 @@ public sealed class SimulationRunner : MonoBehaviour
             if (boat.Tick != requestTick) throw new InvalidOperationException("Simulation moved while waiting.");
             if (packet["actions"] != null || packet["action"] is not JObject action || action.Count != 2)
                 throw new FormatException("Expected one action object.");
-            if (action["acceleration_index"]?.Type != JTokenType.Integer || action["turn_index"]?.Type != JTokenType.Integer)
+            if (action["speed_index"]?.Type != JTokenType.Integer || action["heading_index"]?.Type != JTokenType.Integer)
                 throw new FormatException("Both action indices must be explicit integers.");
             if (packet["action_duration_s"]?.Type != JTokenType.Float && packet["action_duration_s"]?.Type != JTokenType.Integer)
                 throw new FormatException("Missing action duration.");

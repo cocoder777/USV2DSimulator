@@ -10,6 +10,7 @@ public sealed class BoatActionExecutor : MonoBehaviour
     private DiscreteBoatAction action;
     private int remainingSteps;
     private float fixedDt;
+    private float targetHeading;
     void Awake() { boat = GetComponent<BoatDynamics2D>(); }
     public void Cancel() { action = null; remainingSteps = 0; boat.ClearControl(); }
     public void AcceptAction(DiscreteBoatAction command, float actionDuration, float dt)
@@ -17,15 +18,15 @@ public sealed class BoatActionExecutor : MonoBehaviour
         DiscreteAction.Validate(command);
         remainingSteps = DiscreteAction.Steps(actionDuration, dt);
         action = new DiscreteBoatAction {
-            acceleration_index = command.acceleration_index, turn_index = command.turn_index };
+            speed_index = command.speed_index, heading_index = command.heading_index };
+        targetHeading = boat.HeadingDeg + DiscreteAction.HeadingOffsetsDeg[command.heading_index];
         fixedDt = dt;
     }
     public bool PrepareStep(float dt)
     {
         if (!HasAction) return false;
         if (Mathf.Abs(fixedDt - dt) > 1e-7f) throw new InvalidOperationException("Fixed timestep changed during execution.");
-        boat.SetControl(DiscreteAction.AccelerationFractions[action.acceleration_index] * boat.maxAcceleration,
-            DiscreteAction.TurnFractions[action.turn_index] * boat.maxAngularAccelerationDeg);
+        boat.SetNavigationTarget(DiscreteAction.Speed(action.speed_index, boat), targetHeading);
         return true;
     }
     public void FinishStep()

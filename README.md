@@ -1,116 +1,59 @@
-# USV2DSimulator
+﻿# USV2DSimulator
 
-基于 **Unity Universal 2D** 的无人艇（USV）运动仿真平台，提供二维动力学、参数调节、地图任务、状态和轨迹显示，支持手动控制与 Jev 决策控制。
+基于 Unity Universal 2D 的无人艇仿真平台，用于验证 Jev 沿地图虚线航行、按序打卡和终点停车的能力。支持手动加速度控制与 Jev 航速/航向控制。
 
-## 功能
+## 环境与启动
 
-- **二维运动**：前进、减速、后退和转向，包含速度与加速度限制、阻尼；当前简化配置的加速度指令立即生效。
-- **手动 / Jev 控制**：WASD 操作，或由 Jev 每次选择一个动作，执行后依据最新状态重新决策。
-- **实时参数面板**：调整动力学参数，选择地图和动作持续时间。
-- **任务与轨迹**：显示参考路线和实际轨迹，按序打卡并判断终点停车；完成后自动导出轨迹数据和对比图。
+- Unity **6000.6.5f1**，打开 `Assets/Scenes/Main.unity` 并进入 Play。
+- Python 3.10+；正式 Jev 客户端仅依赖标准库，轨迹绘图依赖 Matplotlib。
 
-## 环境
-
-| 项目 | 配置 |
-| --- | --- |
-| Unity Editor | **6000.6.5f1**，以 `ProjectSettings/ProjectVersion.txt` 为准 |
-| 渲染 | Universal Render Pipeline，2D 场景 |
-| Python | 建议 3.10 或更新版本；Jev 客户端仅使用标准库，轨迹绘图需要 Matplotlib |
-| 运行场景 | `Assets/Scenes/Main.unity` |
-| 主要开发环境 | Windows / PowerShell |
-
-项目使用简化二维运动模型，未包含严格船舶水动力学、独立横向漂移、风浪和障碍物。
-
-## 快速开始
-
-### 1. 获取并打开项目
+在项目根目录执行：
 
 ```powershell
-git clone https://github.com/cocoder777/USV2DSimulator.git
-cd USV2DSimulator
+New-Item -ItemType Directory -Force Logs | Out-Null
+python jev_api/boat_client.py --log Logs/jev.jsonl
 ```
 
-在 Unity Hub 中添加项目，使用 Unity **6000.6.5f1** 打开。首次打开等待资源和依赖导入完成，然后打开 **`Assets/Scenes/Main.unity`**，点击 Play。
+等待终端显示 `Jev worker listening`，在 Unity 选择 Level 0，切换 Jev 模式，设置 Action duration 为 **0.40 s**，点击 **Start Jev**。
 
-### 2. 手动控制
+Jev 每次从 **8 档有符号速度 × 8 个相对航向**的 64 个选项中选择一个。速度和航向瞬时生效，固定航向执行一段时间，再暂停采集观测。等待 API 时不推进仿真时间。没有并行决策、动力系统响应、风浪或障碍物。
 
-默认是 Manual 模式；点击 Game 窗口使键盘输入生效。
+速度比例为 `[-1, -0.5, 0, 0.1, 0.25, 0.5, 0.75, 1]`，正负档分别乘最大前进/后退速度。相对航向为 `[0, 45, 90, 135, 180, -135, -90, -45]` 度，左正右负；相对于采样时船头只设置一次。负速度沿新船头反方向移动。
+
+## 航线与模型信息
+
+地图预设虚线就是参考航线。Unity 发送虚线采样点、打卡点、当前位置和航向；位置以模拟经纬度表示，Python 转换为米制坐标，再转为船体坐标。
+
+Python 保留完整航线，但模型只看当前航线投影点、前方 1/2/3/4/6 米处的虚线位置、下一个打卡点及其到达半径、动作时长。进度匹配结合打卡段和历史进度，避免在交叉处跳段。模型不接收船体编号、航线编号、经纬度、当前速度和加速度参数，不接收推荐速度或方向。
+
+按序进入中间打卡圈即可；终点要求同时位于到达圈内且绝对速度不超过停车阈值。Level 0 默认半径 1 米、停车阈值 0.1 m/s。任务完成后仿真暂停并自动保存轨迹 JSON 和 PNG。
+
+## 操作
 
 | 操作 | 功能 |
 | --- | --- |
-| W / S | 向前加速 / 减速并可继续后退 |
-| A / D | 左转 / 右转 |
-| R | 重置小船、任务进度和本局轨迹 |
-| 左下角模式按钮 | 切换 Manual / Jev |
-| 右侧参数面板 | 实时调节动力学参数 |
+| W/S、A/D | Manual 模式加速/减速、左/右转 |
+| R | 重置船、进度与轨迹 |
+| 左下角模式按钮 | Manual / Jev |
+| Start Jev | 开始决策循环 |
+| Retry Jev | API 或丢包导致停滞后重新采样请求 |
+| Level 0～4 | 切换地图并重置 |
 
-### 3. Jev 控制
+Jev 模式仅使用最大前进/后退速度；手动模式保留原有加速度、阻尼与执行器响应参数。
 
-首次使用按以下顺序操作：
+## 轨迹与验证
 
-1. 保持 Unity 已打开 `Main.unity` 并进入 Play；首次测试选择右侧 **Level 0**。
-2. 在项目根目录打开 PowerShell，创建日志目录并启动客户端：
-
-   ```powershell
-   New-Item -ItemType Directory -Force Logs | Out-Null
-   python jev_api/boat_client.py --log Logs/jev.jsonl
-   ```
-
-3. 终端出现 `Jev worker listening on 127.0.0.1:5006` 表示客户端已启动，保持这个终端运行。默认 Unity 使用本机 UDP 5005，Python 使用 5006。
-4. 回到 Unity，点击左下角模式按钮切换为 **Jev**。在右侧 **`JEV CONTROL`** 设置 **Action duration = 0.40 s**，再点击 **`Start Jev`**。
-
-只切换 Jev 模式还不会开始决策，必须点击 `Start Jev`。开始后时长锁定；按 R 重置后可重新设置。
-
-**如何确认运行正常：**界面在 `Waiting` 和 `Executing` 间切换，船的位置随执行更新；终端持续输出 `decision_result`，`Logs/jev.jsonl` 记录实际请求、响应和动作。`Waiting` 期间船保持静止是当前设计：等待 API 不消耗仿真时间，收到动作后才执行下一段 0.4 秒。
-
-## 当前 Jev 决策方式
-
-每次请求一道 `action` Choice，从 8×7 个组合中选择线/角加速度，执行结束后用最新状态重新决策。Python 将当前目标转为船体坐标，提供线速度、角速度及必要物理参数，并按目标类型生成打卡或停车题目；参考路线仅供显示和轨迹对比。
-
-当前两个执行器时间常数均为零，决策期间暂停物理仿真。Unity/Python 使用 version 5 协议，每次返回一个 `action` 对象。字段与处理过程见 [Jev API 调用说明](docs/bian/当前控制与Jev协议.md)。
-
-## 地图与任务
-
-右侧 `MAP LEVEL` 可选择 **Level 0～4**，包含基础路线、交替弯道、折返和密集交叉路线。切换地图会重置小船及任务；`Reload task` 重新加载当前地图。
-
-按序通过任务点；中间点不要求停车，默认终点要求同时满足“距离不超过 1 米”和“绝对线速度不超过 0.1 m/s”，不要求角速度归零。参考路线供监控和轨迹对比查看。完成任务后，本局仿真暂停。
-
-地图数据位于 `Assets/StreamingAssets/fixed_route.json` 和 `Assets/StreamingAssets/Maps/`，Editor 与独立程序均从这里加载。
-
-## 轨迹自动导出
-
-任务完成、状态变为 **Completed** 后，程序自动保存轨迹 JSON，并调用绘图程序生成 PNG 对比图，无需手动导出。图片生成后，点击右侧 **`Open trajectory plot`** 查看。
-
-- Unity Editor：`Logs/trajectories/`
-- 独立程序：`Application.persistentDataPath/Trajectories/`
-
-<details>
-<summary>首次使用时的绘图环境配置</summary>
-
-PNG 生成依赖 Python 和 Matplotlib；环境已配置时无需重复操作。首次需要配置时，在项目根目录运行：
+Editor 导出位置为 `Logs/trajectories/`；独立程序使用 `Application.persistentDataPath/Trajectories/`。首次配置绘图：
 
 ```powershell
 python -m pip install -r Assets/StreamingAssets/Tools/requirements.txt
 python Tools/configure_trajectory_plot.py
 ```
 
-配置完成后，每局任务完成都会自动导出轨迹并生成图片。
+离线验证：
 
-</details>
-
-## 项目结构
-
-```text
-Assets/Scenes/Main.unity     主仿真场景
-Assets/Scripts/             仿真、任务、界面和通信代码
-Assets/StreamingAssets/     地图数据与运行时绘图工具
-jev_api/                    Jev 客户端与独立 API 示例
-Tools/                      地图生成与绘图配置工具
-Packages/                   Unity 包依赖
-ProjectSettings/            Unity 项目配置
-docs/                       详细说明
+```powershell
+python -m unittest discover -s jev_api/tests -v
 ```
 
-## 更多资料
-
-- [Jev API 调用说明](docs/bian/当前控制与Jev协议.md)：接口使用、请求和回答格式、本地解析与执行。
+参见 [客户端结构](jev_api/README.md)、[当前协议](docs/bian/当前控制与Jev协议.md)、[甲方对接说明](docs/对接单艇决策服务.md)。本版本借用甲方的航线任务思想，尚未接入甲方组播帧、执行状态回复、计划航速或转弯半径约束。

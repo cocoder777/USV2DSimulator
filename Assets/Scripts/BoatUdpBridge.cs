@@ -88,7 +88,7 @@ public class BoatUdpBridge : MonoBehaviour
     public void QueuePacket(JObject packet)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(packet.ToString(Newtonsoft.Json.Formatting.None));
-        if (bytes.Length > 8192) throw new ArgumentException("UDP packet exceeds 8192-byte protocol budget.");
+        if (bytes.Length > 65000) throw new ArgumentException("UDP packet exceeds 65000-byte protocol budget.");
         lock (gate) { outgoing.Enqueue(((string)packet["type"], bytes)); }
     }
 
@@ -118,7 +118,7 @@ public class BoatUdpBridge : MonoBehaviour
                     {
                         IPEndPoint source = new IPEndPoint(IPAddress.Any, 0);
                         byte[] bytes = boundSocket.Receive(ref source);
-                        if (!source.Equals(endpoint) || bytes.Length == 0 || bytes.Length > 8192) continue;
+                        if (!source.Equals(endpoint) || bytes.Length == 0 || bytes.Length > 65000) continue;
                         string json;
                         try { json = utf8.GetString(bytes); }
                         catch (DecoderFallbackException) { continue; }

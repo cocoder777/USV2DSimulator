@@ -7,7 +7,7 @@ import socket
 from decision_worker import DecisionScheduler, IDENTITY_FIELDS, PROTOCOL_VERSION
 
 API_KEY = 'apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141'
-MAX_PACKET = 8192
+MAX_PACKET = 65000
 
 
 def dumps(value):
@@ -29,7 +29,9 @@ def valid_request(packet):
             return False
         if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
             return False
-        return len(obs["action_space"]["acceleration_fractions"]) == 8 and len(obs["action_space"]["turn_fractions"]) == 7
+        return (len(obs["action_space"]["speeds_mps"]) == 8
+                and len(obs["action_space"]["heading_offsets_deg"]) == 8
+                and obs["task"]["planWaypointNum"] == len(obs["task"]["planWaypointList"]))
     except (KeyError, TypeError):
         return False
 

@@ -116,42 +116,49 @@ public class BoatParameterPanel : MonoBehaviour
             boat.maxReverseSpeed, 0f, 3f, "m/s"
         );
 
-        boat.maxAcceleration = DrawSlider(
-            "Max acceleration",
-            boat.maxAcceleration, 0.1f, 5f, "m/s^2"
-        );
+        if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
+        {
+            GUILayout.Label("Jev sets speed and heading instantly. Manual dynamics below do not apply.", hintStyle);
+        }
+        else
+        {
+            boat.maxAcceleration = DrawSlider(
+                "Max acceleration",
+                boat.maxAcceleration, 0.1f, 5f, "m/s^2"
+            );
 
-        boat.maxAngularAccelerationDeg = DrawSlider(
-            "Max angular acceleration",
-            boat.maxAngularAccelerationDeg, 5f, 180f, "deg/s^2"
-        );
+            boat.maxAngularAccelerationDeg = DrawSlider(
+                "Max angular acceleration",
+                boat.maxAngularAccelerationDeg, 5f, 180f, "deg/s^2"
+            );
 
-        boat.maxYawRateDeg = DrawSlider(
-            "Max turning rate",
-            boat.maxYawRateDeg, 5f, 120f, "deg/s"
-        );
+            boat.maxYawRateDeg = DrawSlider(
+                "Max turning rate",
+                boat.maxYawRateDeg, 5f, 120f, "deg/s"
+            );
 
-        boat.accelerationTimeConstant = DrawSlider(
-            "Linear acceleration response",
-            boat.accelerationTimeConstant, 0f, 5f, "s"
-        );
+            boat.accelerationTimeConstant = DrawSlider(
+                "Linear acceleration response",
+                boat.accelerationTimeConstant, 0f, 5f, "s"
+            );
 
-        boat.angularAccelerationTimeConstant = DrawSlider(
-            "Angular acceleration response",
-            boat.angularAccelerationTimeConstant, 0f, 5f, "s"
-        );
+            boat.angularAccelerationTimeConstant = DrawSlider(
+                "Angular acceleration response",
+                boat.angularAccelerationTimeConstant, 0f, 5f, "s"
+            );
 
-        GUILayout.Label("Response is a time constant: larger values respond more slowly; 0 applies commands immediately.", hintStyle);
+            GUILayout.Label("Response is a time constant: larger values respond more slowly; 0 applies commands immediately.", hintStyle);
 
-        boat.linearDamping = DrawSlider(
-            "Linear damping",
-            boat.linearDamping, 0f, 2f, "1/s"
-        );
+            boat.linearDamping = DrawSlider(
+                "Linear damping",
+                boat.linearDamping, 0f, 2f, "1/s"
+            );
 
-        boat.angularDamping = DrawSlider(
-            "Angular damping",
-            boat.angularDamping, 0f, 5f, "1/s"
-        );
+            boat.angularDamping = DrawSlider(
+                "Angular damping",
+                boat.angularDamping, 0f, 5f, "1/s"
+            );
+        }
 
         GUILayout.Space(6);
 

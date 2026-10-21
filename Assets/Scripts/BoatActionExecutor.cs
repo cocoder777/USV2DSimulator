@@ -16,17 +16,20 @@ public sealed class BoatActionExecutor : MonoBehaviour
     public void AcceptAction(DiscreteBoatAction command, float actionDuration, float dt)
     {
         DiscreteAction.Validate(command);
+        if (command.speed * DiscreteAction.MetresPerSecondPerKnot > boat.maxForwardSpeed + 0.00001f)
+            throw new FormatException("Target speed exceeds the boat limit.");
         remainingSteps = DiscreteAction.Steps(actionDuration, dt);
         action = new DiscreteBoatAction {
-            speed_index = command.speed_index, heading_index = command.heading_index };
-        targetHeading = boat.HeadingDeg + DiscreteAction.HeadingOffsetsDeg[command.heading_index];
+            speed = command.speed, course = command.course };
+        // Simulator actuator adapter; the decision layer never needs the bow angle.
+        targetHeading = command.speed == 0 ? boat.HeadingDeg : 90f - command.course;
         fixedDt = dt;
     }
     public bool PrepareStep(float dt)
     {
         if (!HasAction) return false;
         if (Mathf.Abs(fixedDt - dt) > 1e-7f) throw new InvalidOperationException("Fixed timestep changed during execution.");
-        boat.SetNavigationTarget(DiscreteAction.Speed(action.speed_index, boat), targetHeading);
+        boat.SetNavigationTarget(action.speed * DiscreteAction.MetresPerSecondPerKnot, targetHeading);
         return true;
     }
     public void FinishStep()

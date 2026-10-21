@@ -23,31 +23,36 @@
       "id": "S",
       "role": "start",
       "x": 0.0,
-      "y": 0.0
+      "y": 0.0,
+      "routeSpeed": 0.0
     },
     {
       "id": "P1",
       "role": "checkpoint",
       "x": 10.0,
-      "y": 0.0
+      "y": 0.0,
+      "routeSpeed": 2.5
     },
     {
       "id": "P2",
       "role": "checkpoint",
       "x": 20.0,
-      "y": 5.0
+      "y": 5.0,
+      "routeSpeed": 1.75
     },
     {
       "id": "P3",
       "role": "checkpoint",
       "x": 30.0,
-      "y": 5.0
+      "y": 5.0,
+      "routeSpeed": 3.75
     },
     {
       "id": "E",
       "role": "end",
       "x": 40.0,
-      "y": 0.0
+      "y": 0.0,
+      "routeSpeed": 1.0
     }
   ],
   "path": {

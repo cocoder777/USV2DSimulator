@@ -71,7 +71,9 @@ def build_level(base, level):
     task["waypoints"] = [
         {"id": "S" if i == 0 else "E" if i == len(layout) - 1 else f"P{i}",
          "role": "start" if i == 0 else "end" if i == len(layout) - 1 else "checkpoint",
-         "x": float(x), "y": float(y)}
+         "x": float(x), "y": float(y),
+         "routeSpeed": (0.0 if i == 0 else 1.0 if i == len(layout) - 1
+                        else ([1.0, 1.75, 2.5] if level == 4 else [2.5, 1.75, 3.75])[(i - 1) % 3])}
         for i, (x, y) in enumerate(layout)
     ]
     task = build_return_curve(task) if level >= 3 else build_curve(task)

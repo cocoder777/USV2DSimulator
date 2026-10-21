@@ -9,16 +9,62 @@ public sealed class MissionProgress
     public bool Completed => NextIndex == Route.waypoints.Length;
     public TargetRouteData.RoutePoint Next => Completed ? null : Route.waypoints[NextIndex];
     public event Action<int> PointPassed;
+    public float?[] PassingMaxSpeeds { get; }
+    private readonly bool[] passageFinished;
 
-    public MissionProgress(TargetRouteData route) { Route = route ?? throw new ArgumentNullException(nameof(route)); }
+    public MissionProgress(TargetRouteData route)
+    {
+        Route = route ?? throw new ArgumentNullException(nameof(route));
+        PassingMaxSpeeds = new float?[route.waypoints.Length];
+        passageFinished = new bool[route.waypoints.Length];
+    }
 
     public void Reset(Vector2 position, float speed)
     {
         NextIndex = 0;
+        Array.Clear(PassingMaxSpeeds, 0, PassingMaxSpeeds.Length);
+        Array.Clear(passageFinished, 0, passageFinished.Length);
         Evaluate(position, position, speed);
+        // Start is an initial-position marker, not a speed-limited departure gate.
+        passageFinished[0] = true;
     }
 
-    public void Evaluate(Vector2 previous, Vector2 current, float speed)
+    public void Evaluate(Vector2 previous, Vector2 current, float speed, float? previousSpeed = null)
+    {
+        EvaluateProgress(previous, current, speed);
+        // Observe the valid target and already-passed circles until first exit.
+        // Include swept intersections, even when both physical-step endpoints are outside.
+        for (int i = 0; i <= Math.Min(NextIndex, Route.waypoints.Length - 1); i++)
+        {
+            if (passageFinished[i]) continue;
+            var p = Route.waypoints[i];
+            var center = new Vector2(p.x, p.y);
+            var delta = current - previous;
+            var offset = previous - center;
+            float a = delta.sqrMagnitude, low = 0, high = 1;
+            if (a < 1e-12f)
+            {
+                if (offset.sqrMagnitude > Route.arrival_radius_m * Route.arrival_radius_m) continue;
+            }
+            else
+            {
+                float b = 2 * Vector2.Dot(offset, delta);
+                float c = offset.sqrMagnitude - Route.arrival_radius_m * Route.arrival_radius_m;
+                float disc = b*b - 4*a*c;
+                if (disc < 0) continue;
+                low = Mathf.Max(0, (-b - Mathf.Sqrt(disc))/(2*a));
+                high = Mathf.Min(1, (-b + Mathf.Sqrt(disc))/(2*a));
+                if (low > high) continue;
+            }
+            float v0 = previousSpeed ?? speed;
+            float peak = Mathf.Max(Mathf.Abs(Mathf.Lerp(v0, speed, low)), Mathf.Abs(Mathf.Lerp(v0, speed, high)));
+            PassingMaxSpeeds[i] = Mathf.Max(PassingMaxSpeeds[i] ?? 0, peak);
+            if (i < NextIndex && (current-center).sqrMagnitude > Route.arrival_radius_m*Route.arrival_radius_m)
+                passageFinished[i] = true;
+        }
+    }
+
+    private void EvaluateProgress(Vector2 previous, Vector2 current, float speed)
     {
         float earliest = 0;
         while (!Completed)

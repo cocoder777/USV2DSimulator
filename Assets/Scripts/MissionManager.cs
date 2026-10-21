@@ -72,6 +72,6 @@ public sealed class MissionManager : MonoBehaviour
     }
 
     private void ResetProgress() { Progress?.Reset(boat.Position, boat.Speed); }
-    public void Evaluate(Vector2 previous) { Progress?.Evaluate(previous, boat.Position, boat.Speed); }
+    public void Evaluate(Vector2 previous, float previousSpeed) { Progress?.Evaluate(previous, boat.Position, boat.Speed, previousSpeed); }
     public string Status => Progress == null ? "NoTask" : Progress.Completed ? "Completed" : "Running";
 }

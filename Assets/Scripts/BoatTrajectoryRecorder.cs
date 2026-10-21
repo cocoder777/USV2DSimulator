@@ -104,7 +104,8 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
             var document = new { schema_version = 1, result = "completed", episode_id = episode,
                 map_level = RecordedMapLevel(),
                 route = recordedRoute, samples, simulation_time = boat.SimulationTime,
-                final_speed_mps = boat.Speed, passed_count = mission.Progress.NextIndex };
+                final_speed_mps = boat.Speed, passed_count = mission.Progress.NextIndex,
+                passing_max_speeds_mps = mission.Progress.PassingMaxSpeeds };
             File.WriteAllText(data, JsonConvert.SerializeObject(document, Formatting.Indented));
             LastDataPath = data;
             UnityEngine.Debug.Log("Trajectory data saved: " + data, this);

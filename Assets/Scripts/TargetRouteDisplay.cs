@@ -14,6 +14,7 @@ public sealed class TargetRouteDisplay : MonoBehaviour
     private MissionManager mission;
     private int displayedProgress = -1;
     private readonly List<LineRenderer> markers = new List<LineRenderer>();
+    private readonly List<TextMeshPro> labels = new List<TextMeshPro>();
 
     void OnEnable()
     {
@@ -26,7 +27,18 @@ public sealed class TargetRouteDisplay : MonoBehaviour
 
     void LateUpdate()
     {
-        if (mission?.Progress == null || displayedProgress == mission.Progress.NextIndex) return;
+        if (mission?.Progress == null) return;
+        for (int i = 0; i < labels.Count; i++)
+        {
+            var point = mission.Route.waypoints[i];
+            float? peak = mission.Progress.PassingMaxSpeeds[i];
+            string text = point.id + "\n计划航速（通过上限）：" + point.routeSpeed.ToString("F2") + " m/s";
+            if (point.role == "start") { labels[i].text = point.id; continue; }
+            if (peak.HasValue) text += "\n实际通过最高航速：" + peak.Value.ToString("F2") + " m/s"
+                + (peak.Value > point.routeSpeed + 0.001f ? "（超限）" : "");
+            if (labels[i].text != text) labels[i].text = text;
+        }
+        if (displayedProgress == mission.Progress.NextIndex) return;
         displayedProgress = mission.Progress.NextIndex;
         for (int i = 0; i < markers.Count; i++)
         {
@@ -84,17 +96,20 @@ public sealed class TargetRouteDisplay : MonoBehaviour
                 markers.Add(marker);
                 var labelObject = new GameObject("Label_" + point.id);
                 labelObject.transform.SetParent(generatedRoot.transform, false);
-                labelObject.transform.position = pointPosition + new Vector3(0, route.arrival_radius_m + 0.3f, 0);
+                labelObject.transform.position = pointPosition + new Vector3(0, route.arrival_radius_m + 0.8f, 0);
                 var label = labelObject.AddComponent<TextMeshPro>();
                 label.font = fontAsset;
-                label.fontSharedMaterial = fontAsset.material;
+                var cjk = Resources.Load<TMP_FontAsset>("WaypointChinese");
+                if (cjk != null) label.font = cjk;
+                label.fontSharedMaterial = label.font.material;
                 label.text = point.id;
                 label.richText = false;
-                label.fontSize = 3.2f;
+                label.fontSize = 2.8f;
                 label.color = Color.white;
                 label.alignment = TextAlignmentOptions.Center;
-                label.rectTransform.sizeDelta = new Vector2(3f, 1f);
+                label.rectTransform.sizeDelta = new Vector2(9f, 3f);
                 label.GetComponent<MeshRenderer>().sortingOrder = 1;
+                labels.Add(label);
             }
             generatedRoot.SetActive(true);
             return true;
@@ -138,6 +153,7 @@ public sealed class TargetRouteDisplay : MonoBehaviour
         if (generatedRoot != null) { generatedRoot.SetActive(false); Release(generatedRoot); }
         generatedRoot = null;
         markers.Clear();
+        labels.Clear();
         displayedProgress = -1;
         foreach (Material material in ownedMaterials) if (material != null) Release(material);
         ownedMaterials.Clear();

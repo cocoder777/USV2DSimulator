@@ -23,67 +23,78 @@
       "id": "S",
       "role": "start",
       "x": 0.0,
-      "y": 0.0
+      "y": 0.0,
+      "routeSpeed": 0.0
     },
     {
       "id": "P1",
       "role": "checkpoint",
       "x": 6.4,
-      "y": 0.0
+      "y": 0.0,
+      "routeSpeed": 1.0
     },
     {
       "id": "P2",
       "role": "checkpoint",
       "x": -3.2,
-      "y": 6.4
+      "y": 6.4,
+      "routeSpeed": 1.75
     },
     {
       "id": "P3",
       "role": "checkpoint",
       "x": 8.0,
-      "y": 8.0
+      "y": 8.0,
+      "routeSpeed": 2.5
     },
     {
       "id": "P4",
       "role": "checkpoint",
       "x": -4.8,
-      "y": -1.6
+      "y": -1.6,
+      "routeSpeed": 1.0
     },
     {
       "id": "P5",
       "role": "checkpoint",
       "x": 3.2,
-      "y": 9.6
+      "y": 9.6,
+      "routeSpeed": 1.75
     },
     {
       "id": "P6",
       "role": "checkpoint",
       "x": 9.6,
-      "y": -3.2
+      "y": -3.2,
+      "routeSpeed": 2.5
     },
     {
       "id": "P7",
       "role": "checkpoint",
       "x": -4.0,
-      "y": 2.4
+      "y": 2.4,
+      "routeSpeed": 1.0
     },
     {
       "id": "P8",
       "role": "checkpoint",
       "x": 4.8,
-      "y": 4.0
+      "y": 4.0,
+      "routeSpeed": 1.75
     },
     {
       "id": "P9",
       "role": "checkpoint",
       "x": 0.0,
-      "y": -4.8
+      "y": -4.8,
+      "routeSpeed": 2.5
     },
     {
       "id": "E",
       "role": "end",
       "x": 7.2,
-      "y": 5.6
+      "y": 5.6,
+      "routeSpeed": 1.0
     }
   ],
   "path": {

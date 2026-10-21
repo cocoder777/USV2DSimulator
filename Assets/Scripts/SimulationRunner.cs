@@ -11,7 +11,6 @@ public sealed class SimulationRunner : MonoBehaviour
     public DecisionTimingMode DecisionMode { get; private set; } = DecisionTimingMode.Paused;
     public bool PauseWhileDeciding => DecisionMode == DecisionTimingMode.Paused;
     public bool CanChangeDecisionMode => false;
-    public const int ProtocolVersion = 9;
     public bool JevStarted { get; private set; }
     [Min(0.02f)] public float actionDuration = 0.4f;
     public RunState State { get; private set; } = RunState.Initializing;
@@ -103,12 +102,12 @@ public sealed class SimulationRunner : MonoBehaviour
         catch (Exception error) { Fail(error.Message); }
     }
     private JObject Envelope(string type) => new JObject {
-        ["type"] = type, ["version"] = ProtocolVersion, ["session_id"] = boat.SessionId, ["episode_id"] = boat.EpisodeId,
+        ["type"] = type, ["session_id"] = boat.SessionId, ["episode_id"] = boat.EpisodeId,
         ["run_id"] = boat.RunId, ["decision_id"] = DecisionId, ["tick"] = requestTick };
     public void ReceiveDecision(JObject packet)
     {
         if (boat.Mode != BoatDynamics2D.ControlMode.Jev || DecisionId == null || identity != Identity()
-            || (int?)packet["version"] != ProtocolVersion || (string)packet["session_id"] != boat.SessionId
+            || (string)packet["session_id"] != boat.SessionId
             || (string)packet["episode_id"] != boat.EpisodeId || (string)packet["run_id"] != boat.RunId
             || (string)packet["decision_id"] != DecisionId || (long?)packet["tick"] != requestTick) return;
         if (State != RunState.Waiting) return;
@@ -120,8 +119,9 @@ public sealed class SimulationRunner : MonoBehaviour
             if (boat.Tick != requestTick) throw new InvalidOperationException("Simulation moved while waiting.");
             if (packet["actions"] != null || packet["action"] is not JObject action || action.Count != 2)
                 throw new FormatException("Expected one action object.");
-            if (action["speed_index"]?.Type != JTokenType.Integer || action["heading_index"]?.Type != JTokenType.Integer)
-                throw new FormatException("Both action indices must be explicit integers.");
+            foreach (string field in new[] { "speed", "course" })
+                if (action[field]?.Type != JTokenType.Float && action[field]?.Type != JTokenType.Integer)
+                    throw new FormatException("Missing numeric action field: " + field);
             if (packet["action_duration_s"]?.Type != JTokenType.Float && packet["action_duration_s"]?.Type != JTokenType.Integer)
                 throw new FormatException("Missing action duration.");
             if (Math.Abs((double)packet["action_duration_s"] - requestedDuration) > 1e-6)
@@ -141,7 +141,7 @@ public sealed class SimulationRunner : MonoBehaviour
         if (completedEpisodeId == boat.EpisodeId) return;
         completedEpisodeId = boat.EpisodeId;
         bridge?.QueuePacket(new JObject {
-            ["type"] = "mission_completed", ["version"] = ProtocolVersion,
+            ["type"] = "mission_completed",
             ["session_id"] = boat.SessionId, ["episode_id"] = boat.EpisodeId,
             ["run_id"] = boat.RunId, ["tick"] = boat.Tick
         });
@@ -155,7 +155,8 @@ public sealed class SimulationRunner : MonoBehaviour
             try { if (!player.PrepareStep(dt)) return false; }
             catch (Exception error) { Fail(error.Message); return false; }
         }
-        Vector2 previous = boat.Position; boat.Step(dt); mission.Evaluate(previous);
+        Vector2 previous = boat.Position; float previousSpeed = boat.Speed;
+        boat.Step(dt); mission.Evaluate(previous, previousSpeed);
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
         { player.FinishStep(); if (!player.HasAction) State = RunState.Initializing; }
         if (mission.Progress.Completed) CompleteMission();

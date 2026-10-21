@@ -1,284 +1,310 @@
-"""Route task and held navigation choices, expressed without signed-coordinate decoding."""
+"""Jev chooses ground-speed/course commands using waypoint-only global observations."""
 
 import math
-from route_context import RouteContext
-from tools.navigation_motion import delta_angle, predict_motion
+from tools.waypoint_geometry import WaypointGeometry, KNOT_MPS
+from tools.navigation_motion import predict_ground_motion
 
-DEFAULT_TRACKING_PREFERENCE_M = 0.25
-
-SPEED_NAMES = (
-    "reverse_full",
-    "reverse_half",
-    "stop",
-    "forward_slow",
-    "forward_quarter",
-    "forward_half",
-    "forward_three_quarters",
-    "forward_full",
-)
-HEADING_NAMES = (
-    "ahead",
-    "ahead_left",
-    "left",
-    "behind_left",
-    "behind",
-    "behind_right",
-    "right",
-    "ahead_right",
+DIRECTIONS = (
+    "north",
+    "northeast",
+    "east",
+    "southeast",
+    "south",
+    "southwest",
+    "west",
+    "northwest",
 )
 ACTION_CHOICES = {
-    f"{s}__{h}": {"speed_index": i, "heading_index": j}
-    for i, s in enumerate(SPEED_NAMES)
-    for j, h in enumerate(HEADING_NAMES)
+    f"speed_{i}__{name}": (i, j) for i in range(8) for j, name in enumerate(DIRECTIONS)
 }
 
 
 def position_text(point):
-    forward, left = point
-    longitudinal = f"{abs(forward):.3f} m " + ("ahead" if forward >= 0 else "behind")
-    lateral = f"{abs(left):.3f} m " + ("left" if left >= 0 else "right")
-    return longitudinal + " and " + lateral
-
-
-def speed_text(speed):
+    east, north = point
     return (
-        "stationary"
-        if abs(speed) < 1e-6
-        else f'moving {"forward" if speed>0 else "backward"} at {abs(speed):.3f} m/s'
-    )
-
-
-def turn_text(yaw):
-    return (
-        "not rotating"
-        if abs(yaw) < 1e-4
-        else f'turning {"left" if yaw>0 else "right"} at {abs(yaw):.3f} deg/s'
-    )
-
-
-def heading_text(angle):
-    return (
-        "the current sampled bow direction"
-        if abs(angle) < 1e-4
-        else f'{abs(angle):.3f} degrees {"left" if angle>0 else "right"} of the current sampled bow'
-    )
-
-
-def speed_response(initial, target, transition_time, duration):
-    if transition_time <= 0:
-        return target * duration, target
-    ramp = min(duration, transition_time)
-    a = (target - initial) / transition_time
-    return initial * ramp + 0.5 * a * ramp * ramp + target * (duration - ramp), (
-        target if duration >= transition_time else initial + a * ramp
+        f"{abs(east):.3f} m "
+        + ("east" if east >= 0 else "west")
+        + " and "
+        + f"{abs(north):.3f} m "
+        + ("north" if north >= 0 else "south")
     )
 
 
 BACKGROUND = (
-    "You are the navigator of a boat in a two-dimensional simulator. A dashed reference route connects "
-    "mandatory checkpoints in order. Your job is to follow this route, enter every checkpoint circle "
-    "without passing it by, and finally stop inside the last circle. The route is the intended path "
-    "between checkpoints, not merely decoration. The current checkpoint is the next mandatory gate, "
-    "not a reason to shortcut a bend. No obstacles, wind, or sideways drift exist in this simulation. "
-    "The world pauses while you decide. The boat executes one selected target speed and heading "
-    "for the specified simulation duration before you receive a fresh observation."
+    "Navigate a boat through mandatory waypoint circles IN ORDER, then stop inside the final circle. "
+    "There is no prescribed path between points: choose your own efficient path. "
+    "All positions and directions use FIXED geographic east/north axes, NEVER the bow or camera. "
+    "No obstacles, wind or sideways drift are simulated. The world pauses while you decide. "
+    "Each waypoint has a MAXIMUM permitted actual speed while passing its circle; this is only a ceiling, "
+    "not a desired speed or a speed to match. Slower is allowed. "
+    "You choose one nonnegative target ground speed and one ABSOLUTE course, clockwise from north. "
+    "The simulator actuator turns the boat smoothly; a course command is not an instantaneous movement direction."
 )
 INSTRUCTIONS = (
-    "Route segments are ORDERED, even where they cross or run beside each other. "
-    "ordered_route_ahead ends at the CURRENT mandatory checkpoint; follow that segment first. "
-    "after_checkpoint_preview belongs to the NEXT segment: use it to anticipate braking and turning, "
-    "not as a shortcut or a replacement for the current checkpoint. "
-    "A checkpoint may require a near U-turn. After a checkpoint switches, the new route may be behind the bow; "
-    "reduce speed and turn toward it rather than moving fast while the bow swings. "
-    "When already outside the preferred tracking distance, that distance is temporarily unattainable: "
-    "compare END distance reductions to recover toward the active line. Do not keep crawling parallel "
-    "to an offset line merely to avoid a corrective turn. The near_route_direction points toward the "
-    "first upcoming point on the active curve; distant checkpoints must not pull you across a bend. "
-    "Use the longer SAME-command lookahead as a warning of imminent overshoot or leaving the route. "
-    "Actual execution still lasts only the stated action duration and replans afterward. "
-    "When a high-speed command would soon depart the curve, choose a slower approach before the turn. "
-    "Aim to keep the whole movement within task.preferred_tracking_error_m of the reference line. "
-    "This is a soft tracking preference, NOT the checkpoint arrival radius. "
-    "Prefer a smaller-speed choice if needed to satisfy that tracking preference, while avoiding unnecessary crawling. "
-    "When multiple choices have comparable tracking and end alignment, take the one with greater route advance. "
-    "Also inspect END BOW ALIGNMENT and END YAW: an endpoint close to the line is not enough "
-    "if the bow points across it or the boat is still rotating away. Prefer ending aligned with "
-    "the local reference direction and with little residual rotation, while continuing useful progress. "
-    "Slow before turns rather than alternate large left/right commands at high speed. "
-    "Each candidate reports its geometric route error and along-route progress over the SAME action duration. "
-    "Smaller route-error distances mean closer tracking; larger forward along-route advance means less completion time. "
-    "Compare these jointly: do not crawl for a negligible error reduction, and do not accept large deviation merely for speed. "
-    "Choose ONE combined target speed and target heading for the next action. "
-    "First ensure the current checkpoint is not missed and the final stopping condition is respected. "
-    "Follow the NEAR portion of the ordered reference route closely. Within those requirements, "
-    "finish the route in as little SIMULATION TIME as possible: choose useful forward progress "
-    "rather than unnecessary stops, crawling, or detours. Go fast on aligned straight sections; "
-    "slow only as needed to negotiate a bend, correct deviation, enter a checkpoint, or stop. "
-    "The candidate midpoint and endpoint describe curved motion in the CURRENT observation frame. "
-    "A heading target is not an immediate movement direction. Account for existing rotation, "
-    "the speed ramp, and the end yaw before choosing another turn. If the current checkpoint "
-    "is behind, recover toward it rather than following the route beyond it. "
-    "Checkpoint: enter its circle while moving; no parking. Final approach: enter and brake to "
-    "remain inside. Final parking: target zero speed until actual speed satisfies the threshold. "
-    "A stopped boat outside the final circle must approach, not repeatedly choose zero speed."
+    "Choose ONE command. Treat a predicted passing_speed_above_ceiling=true as a violation to avoid. "
+    "Speed ceilings are mandatory and take priority over faster progress. An EXCEEDS warning must not be traded for speed. "
+    "If excess is already unavoidable from current motion, brake strongly to reduce it rather than accelerate. "
+    "Never accelerate hard near a circle merely because this single action stops short of entering it. "
+    "Use the longer same-command preview to anticipate the following action. "
+    "On final approach use a slow controlled entry under its ceiling, then stop. "
+    "Do not stop far outside and then restart at full speed: approach at a low nonzero speed instead. "
+    "First pass the current mandatory circle without exceeding its speed ceiling. "
+    "Future points are previews only; never skip the current point. "
+    "Brake BEFORE entering a slower waypoint circle: the ceiling applies to ACTUAL speed, not commanded speed. "
+    "Because forecasts are approximate, begin braking with spatial margin: do not rely on barely meeting the ceiling at the exact boundary. "
+    "Use approach_margin_speed_above_ceiling as an early-braking warning, especially with residual high speed or a course change. "
+    "The extra approach margin is a conservative cue only; the actual arrival radius and speed ceiling are unchanged. "
+    "Account for speed and course transition durations. A zero-speed command brakes over time, not instantly. "
+    "Intermediate waypoints require no stop. Once a waypoint is passed, proceed to the next one; "
+    "keep respecting the previous ceiling until you leave its circle. "
+    "If recently_passed_circle exists, its exit ceiling is still ACTIVE even though the target switched. "
+    "A candidate with previous_circle_speed_above_ceiling=true accelerates too early: delay acceleration until outside. "
+    "The final waypoint requires being inside AND slow enough; entering quickly is not completion. "
+    "A stopped boat outside the final circle must approach instead of repeatedly stopping. "
+    "Avoid needless stops, crawling, detours or alternating large course changes. "
+    "After a turn settles, increase speed again when feasible; do not keep the slowest startup speed for a long clear approach. "
+    "Among commands that respect active speed ceilings and reach the correct circle, compare distance_reduction_m: "
+    "prefer useful larger progress over repeatedly crawling for a negligible endpoint improvement. "
+    "Travel fast when far enough away, aligned, and able to brake before the next circle; slow for turns or nearby targets. "
+    "For an off-axis target, diagonal motion or alternating adjacent compass headings can reach it. "
+    "Inspect the predicted endpoint distance and entry facts, but these are APPROXIMATIONS from ground velocity: "
+    "bow direction, yaw rate and actuator progress are unavailable. In particular startup and sharp turns may differ. "
+    "If the waypoint is behind the current movement, slow before turning back. "
+    "When very close or already inside the final circle, prefer braking to zero over another accelerating move. "
+    "All candidates remain available: no local controller selects, ranks or filters your choice."
 )
 
 
-def build_payload(
+def _candidate_facts(
     observation,
-    model="jev-latest",
-    context=None,
-    run_key=None,
-    tracking_preference_m=DEFAULT_TRACKING_PREFERENCE_M,
+    geometry,
+    target_speed,
+    target_course,
+    direction,
+    distance,
+    limit,
+    previous,
 ):
-    if not math.isfinite(tracking_preference_m) or tracking_preference_m <= 0:
-        raise ValueError("Tracking preference must be finite and positive")
-    context = context or RouteContext()
-    geometry = context.prepare(observation, run_key)
     task = observation["task"]
     boat = observation["boat"]
-    sr = observation["response"]
-    hr = observation["heading_response"]
+    execution = observation["execution"]
+    speed = abs(boat["targetSpeed"]) * KNOT_MPS
+    course = boat["targetCourse"]
     duration = observation["planning"]["action_duration_s"]
-    target = geometry["target"]
-    distance = math.hypot(*target["forward_left_m"])
-    inside = distance <= target["arrival_radius_m"]
-    final = task["next_waypoint_index"] == task["planWaypointNum"] - 1
-    stage = (
-        ("final_parking" if inside else "final_approach")
-        if final
-        else "checkpoint_tracking"
+    motion = predict_ground_motion(
+        speed,
+        course,
+        target_speed,
+        target_course,
+        execution["speed_transition_time_s"],
+        execution["course_transition_time_s"],
+        duration,
     )
+    facts = geometry.motion_facts(motion)
+    margin_facts = geometry.motion_facts(motion, radius=task["arrival_radius_m"] * 1.25)
+    future = predict_ground_motion(
+        speed,
+        course,
+        target_speed,
+        target_course,
+        execution["speed_transition_time_s"],
+        execution["course_transition_time_s"],
+        duration * 2,
+    )
+    future_facts = geometry.motion_facts(future)
+    candidate = {
+        "command": {
+            "speed_mps": round(target_speed, 6),
+            "absolute_course_deg": target_course,
+            "direction": direction,
+        },
+        "approximate_effect": {
+            "midpoint": position_text(motion["midpoint"]),
+            "endpoint": position_text(motion["endpoint"]),
+            "end_speed_mps": round(motion["end_speed"], 6),
+            "distance_reduction_m": round(
+                distance - facts["end_checkpoint_distance_m"], 3
+            ),
+            **{
+                k: (round(v, 6) if type(v) is float else v)
+                for k, v in facts.items()
+                if k in ("max_speed_in_circle_mps", "end_checkpoint_distance_m")
+            },
+            "passing_speed_above_ceiling": facts["max_speed_in_circle_mps"] is not None
+            and facts["max_speed_in_circle_mps"] > limit + 1e-5,
+            "approach_margin_speed_above_ceiling": margin_facts[
+                "max_speed_in_circle_mps"
+            ]
+            is not None
+            and margin_facts["max_speed_in_circle_mps"] > limit + 1e-5,
+            "same_command_preview": {
+                "duration_s": duration * 2,
+                "end_checkpoint_distance_m": round(
+                    future_facts["end_checkpoint_distance_m"], 3
+                ),
+                "enters_checkpoint": future_facts["enters_checkpoint"],
+                "passing_speed_above_ceiling": future_facts["max_speed_in_circle_mps"]
+                is not None
+                and future_facts["max_speed_in_circle_mps"] > limit + 1e-5,
+            },
+        },
+    }
+    if previous is not None:
+        previous_facts = geometry.motion_facts(motion, previous)
+        previous_peak = previous_facts["max_speed_in_circle_mps"]
+        previous_limit = task["planWaypointList"][previous]["routeSpeed"]
+        candidate["approximate_effect"].update(
+            {
+                "previous_circle_max_speed_mps": (
+                    None if previous_peak is None else round(previous_peak, 6)
+                ),
+                "previous_circle_speed_above_ceiling": previous_peak is not None
+                and previous_peak > previous_limit + 1e-5,
+            }
+        )
+    return candidate
+
+
+def _describe_candidate(command, effect, duration, distance, limit, previous_limit):
+    preview = effect["same_command_preview"]
+    text = (
+        f"Set target ground speed {command['speed_mps']:.3f} m/s, absolute course {command['absolute_course_deg']:.0f} degrees ({command['direction']}). "
+        f"Approximate motion over {duration:.3f} s: midpoint {effect['midpoint']}; endpoint {effect['endpoint']}; end speed {effect['end_speed_mps']:.3f} m/s. "
+        f"Target distance {distance:.3f} -> {effect['end_checkpoint_distance_m']:.3f} m; distance reduction {effect['distance_reduction_m']:.3f} m. "
+    )
+    peak = effect["max_speed_in_circle_mps"]
+    if peak is None:
+        text += "Current waypoint circle not entered during this estimate. "
+    else:
+        text += (
+            f"Inside current waypoint circle: estimated maximum speed {peak:.3f} m/s, permitted ceiling {limit:.3f} m/s; "
+            + (
+                "EXCEEDS the ceiling. "
+                if effect["passing_speed_above_ceiling"]
+                else "does not exceed the ceiling. "
+            )
+        )
+    if effect["approach_margin_speed_above_ceiling"]:
+        text += "Early braking warning: still above the ceiling in the extra approach margin. "
+    text += (
+        f"If held for {preview['duration_s']:.3f} s instead (hypothetical only): end distance {preview['end_checkpoint_distance_m']:.3f} m; "
+        + (
+            "would enter the circle and EXCEEDS its speed ceiling. "
+            if preview["passing_speed_above_ceiling"]
+            else (
+                "would enter the circle without exceeding its ceiling. "
+                if preview["enters_checkpoint"]
+                else "circle not entered yet. "
+            )
+        )
+    )
+    if "previous_circle_max_speed_mps" in effect:
+        previous_peak = effect["previous_circle_max_speed_mps"]
+        text += (
+            f"Before exiting the PREVIOUS circle: estimated maximum speed {previous_peak:.3f} m/s, permitted ceiling {previous_limit:.3f} m/s; "
+            + (
+                "EXCEEDS the previous ceiling. "
+                if effect["previous_circle_speed_above_ceiling"]
+                else "does not exceed the previous ceiling. "
+            )
+        )
+    if command["speed_mps"] == 0:
+        text += "This is BRAKING TO STOP, not instant stopping; its course value is ignored by the simulator. "
+    text += "Choose when this movement respects active speed ceilings, reaches the required circle and makes efficient progress."
+    return text
+
+
+def build_payload(observation, model="jev-latest"):
+    geometry = WaypointGeometry(observation)
+    task, boat = observation["task"], observation["boat"]
+    execution = observation["execution"]
+    duration = observation["planning"]["action_duration_s"]
+    speed = abs(boat["targetSpeed"]) * KNOT_MPS
+    course = boat["targetCourse"]
+    target = geometry.target
+    distance = math.hypot(*target)
+    final = task["next_waypoint_index"] == task["planWaypointNum"] - 1
+    limit = task["planWaypointList"][task["next_waypoint_index"]]["routeSpeed"]
     state = {
         "task": {
             "background": BACKGROUND,
-            "stage": stage,
-            "preferred_tracking_error_m": tracking_preference_m,
+            "stage": (
+                (
+                    "final_parking"
+                    if distance <= task["arrival_radius_m"]
+                    else "final_approach"
+                )
+                if final
+                else "checkpoint"
+            ),
             "current_point_after_start": task["next_waypoint_index"],
             "total_points_after_start": task["planWaypointNum"] - 1,
-            "current_goal": (
-                "Stop inside the final circle with actual speed no more than "
-                + str(task["stop_speed_mps"])
-                + " m/s."
-                if final
-                else "Enter the current checkpoint circle; keep moving through it."
-            ),
+            "final_stop_threshold_mps": task["stop_speed_mps"],
         },
         "boat": {
-            "translation": speed_text(boat["speed_mps"]),
-            "rotation": turn_text(boat["yaw_rate_deg_s"]),
-        },
-        "route": {
-            "near_route_direction": heading_text(
-                math.degrees(
-                    math.atan2(
-                        geometry["route"]["ahead_points_forward_left_m"][0][1],
-                        geometry["route"]["ahead_points_forward_left_m"][0][0],
-                    )
-                )
-            ),
-            "remaining_along_route_to_checkpoint_m": geometry["route"][
-                "remaining_to_checkpoint_m"
-            ],
-            "after_checkpoint_preview": [
-                position_text(p)
-                for p in geometry["route"]["after_checkpoint_forward_left_m"]
-            ],
-            "cross_track_distance_m": geometry["route"]["cross_track_distance_m"],
-            "nearest_route_point": position_text(
-                geometry["route"]["nearest_point_forward_left_m"]
-            ),
-            "ordered_route_ahead": [
-                position_text(p)
-                for p in geometry["route"]["ahead_points_forward_left_m"]
-            ],
+            "actual_speed_mps": round(speed, 6),
+            "movement_course_deg_clockwise_from_north": course,
+            "course_available": course is not None,
         },
         "target": {
-            "position": position_text(target["forward_left_m"]),
+            "position": position_text(target),
             "distance_m": round(distance, 3),
-            "arrival_radius_m": target["arrival_radius_m"],
-            "inside_arrival_circle": inside,
+            "arrival_radius_m": task["arrival_radius_m"],
+            "inside_arrival_circle": distance <= task["arrival_radius_m"],
+            "passing_speed_ceiling_mps": limit,
+            "forecast_approach_margin_m": task["arrival_radius_m"] * 0.25,
         },
+        "upcoming_waypoints": [
+            {
+                "index": p["index"],
+                "position": position_text(p["east_north_m"]),
+                "passing_speed_ceiling_mps": p["speed_limit_mps"],
+            }
+            for p in geometry.upcoming[1:]
+        ],
         "execution": {
             "duration_s": duration,
-            "frame": "Every position is relative to the boat NOW: ahead/behind and left/right. The route and checkpoints are fixed in the world.",
-            "speed_rule": f'A changed target starts constant acceleration immediately and reaches its target in {sr["speed_transition_time_s"]:.6g} s; zero time is instant. Keeping the same target continues its remaining ramp.',
-            "current_speed_command": speed_text(sr["active_target_speed_mps"]),
-            "speed_ramp_remaining_s": sr["remaining_transition_s"],
-            "heading_rule": f'A changed heading target turns smoothly from the current yaw and arrives with zero yaw in {hr["transition_time_s"]:.6g} s; zero time is instant. The heading offset is set ONCE relative to the sampled bow. Keeping the same WORLD target continues its remaining turn.',
-            "current_heading_command": heading_text(hr["active_target_offset_deg"]),
-            "turn_remaining_s": hr["remaining_transition_s"],
+            **execution,
+            "frame": "Fixed east/north; course 0=N,90=E,180=S,270=W. No bow-relative positions.",
+            "forecast": "Approximate ground-velocity forecast; assumes zero initial course rotation and a fresh response. Unknown startup direction uses candidate direction. Not a guarantee.",
         },
     }
-    if sr["speed_transition_time_s"] <= 0:
-        state["boat"].pop("translation")
-        state["execution"].pop("current_speed_command")
-        state["execution"].pop("speed_ramp_remaining_s")
-    if hr["transition_time_s"] <= 0:
-        state["boat"].pop("rotation")
-        state["execution"].pop("current_heading_command")
-        state["execution"].pop("turn_remaining_s")
-    if not state["boat"]:
-        state.pop("boat")
+    # A passed circle remains subject to its ceiling until the boat exits it.
+    previous = task["next_waypoint_index"] - 1
+    if (
+        previous > 0
+        and math.hypot(*geometry.waypoints[previous]) <= task["arrival_radius_m"]
+    ):
+        state["recently_passed_circle"] = {
+            "position": position_text(geometry.waypoints[previous]),
+            "radius_m": task["arrival_radius_m"],
+            "speed_ceiling_mps": task["planWaypointList"][previous]["routeSpeed"],
+        }
+    active_previous = previous if "recently_passed_circle" in state else None
+    previous_limit = (
+        task["planWaypointList"][previous]["routeSpeed"]
+        if active_previous is not None
+        else None
+    )
     criteria = {}
-    for name, action in ACTION_CHOICES.items():
-        speed = observation["action_space"]["speeds_mps"][action["speed_index"]]
-        angle = observation["action_space"]["heading_offsets_deg"][
-            action["heading_index"]
-        ]
-        st = (
-            sr["remaining_transition_s"]
-            if speed == sr["active_target_speed_mps"]
-            else sr["speed_transition_time_s"]
+    for name, (i, j) in ACTION_CHOICES.items():
+        candidate = _candidate_facts(
+            observation,
+            geometry,
+            observation["action_space"]["speeds_knots"][i] * KNOT_MPS,
+            observation["action_space"]["courses_deg"][j],
+            DIRECTIONS[j],
+            distance,
+            limit,
+            active_previous,
         )
-        same = abs(delta_angle(angle - hr["active_target_offset_deg"])) <= 0.0001
-        ht = hr["remaining_transition_s"] if same else hr["transition_time_s"]
-        turn_delta = hr["active_target_offset_deg"] if same else angle
-        motion = predict_motion(
-            boat["speed_mps"],
-            speed,
-            st,
-            turn_delta,
-            boat["yaw_rate_deg_s"],
-            ht,
+        criteria[name] = _describe_candidate(
+            candidate["command"],
+            candidate["approximate_effect"],
             duration,
-            observation["fixed_dt_s"],
-            include_path=True,
-        )
-        facts = context.motion_facts(motion["path"])
-        advance = (
-            f'{abs(facts["along_route_advance_m"]):.3f} m '
-            + ("forward" if facts["along_route_advance_m"] >= 0 else "backward")
-            + " along the ordered reference route"
-        )
-        future = predict_motion(
-            boat["speed_mps"],
-            speed,
-            st,
-            turn_delta,
-            boat["yaw_rate_deg_s"],
-            ht,
-            duration * 2,
-            observation["fixed_dt_s"],
-            include_path=True,
-        )
-        future_facts = context.motion_facts(future["path"])
-        alignment = delta_angle(motion["end_heading"] - facts["end_route_tangent_deg"])
-        effect = (
-            f'Over this action: route distance RMS {facts["route_error_rms_m"]:.3f} m, maximum {facts["route_error_max_m"]:.3f} m, ending {facts["route_error_end_m"]:.3f} m; '
-            f'If the SAME command were held for {duration*2:.3f} s (hypothetical; actual action is shorter), route maximum distance would be {future_facts["route_error_max_m"]:.3f} m, ending distance {future_facts["route_error_end_m"]:.3f} m. '
-            f"At end the bow is {abs(alignment):.1f} degrees "
-            + ("LEFT" if alignment >= 0 else "RIGHT")
-            + " of the local reference direction. "
-            f'advance {advance}; current checkpoint circle {"entered" if facts["enters_checkpoint"] else "not entered yet"}; end distance to checkpoint {facts["end_checkpoint_distance_m"]:.3f} m. '
-        )
-        criteria[name] = (
-            f"Target: {speed_text(speed)}; aim bow toward {heading_text(angle)}. "
-            f'Halfway position: {position_text(motion["midpoint"])}. '
-            f'End position: {position_text(motion["endpoint"])}. '
-            f'End state: {speed_text(motion["end_speed"])}; bow toward {heading_text(motion["end_heading"])}; {turn_text(motion["end_yaw"])}. '
-            + effect
-            + "Choose when this curved movement follows the near route, passes the current checkpoint as required, and makes efficient progress."
+            distance,
+            limit,
+            previous_limit,
         )
     return {
         "model": model,
@@ -293,7 +319,7 @@ def build_payload(
     }
 
 
-def decode_action(response):
+def decode_action(response, observation):
     answers = response.get("answers") if isinstance(response, dict) else None
     answer = answers.get("action") if isinstance(answers, dict) else None
     if not isinstance(answer, dict) or answer.get("type") != "choice":
@@ -301,4 +327,8 @@ def decode_action(response):
     name = answer.get("choice")
     if not isinstance(name, str) or name not in ACTION_CHOICES:
         raise ValueError("Unknown speed/course choice")
-    return dict(ACTION_CHOICES[name])
+    i, j = ACTION_CHOICES[name]
+    return {
+        "speed": observation["action_space"]["speeds_knots"][i],
+        "course": observation["action_space"]["courses_deg"][j],
+    }

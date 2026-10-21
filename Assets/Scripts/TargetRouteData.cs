@@ -74,6 +74,7 @@ public sealed class TargetRouteData
         [DataMember(IsRequired = true)] public string role;
         [DataMember(IsRequired = true)] public float x;
         [DataMember(IsRequired = true)] public float y;
+        [DataMember(IsRequired = true)] public float routeSpeed; // m/s upper bound while passing the circle
     }
 
     public static TargetRouteData Parse(string json)
@@ -102,6 +103,8 @@ public sealed class TargetRouteData
                     throw new FormatException("Waypoint IDs must be non-empty and unique.");
                 if (point.role != expected)
                     throw new FormatException("Expected start, intermediate checkpoints, and end in array order.");
+                if (!Finite(point.routeSpeed) || point.routeSpeed < 0)
+                    throw new FormatException("Waypoint routeSpeed must be finite and nonnegative (m/s).");
                 if (float.IsNaN(point.x) || float.IsInfinity(point.x)
                     || float.IsNaN(point.y) || float.IsInfinity(point.y))
                     throw new FormatException("Waypoint coordinates must be finite.");

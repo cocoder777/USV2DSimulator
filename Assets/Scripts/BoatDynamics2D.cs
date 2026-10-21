@@ -43,14 +43,8 @@ public class BoatDynamics2D : MonoBehaviour
     [Min(0)] public float speedResponseTime = 0.5f;
     [Min(0)] public float headingResponseTime = 0.5f;
     private float navigationHeadingTarget, headingTransitionRemaining, headingResponseDuration;
-    public float HeadingTargetOffset => navigationHeadingTarget - headingRad * Mathf.Rad2Deg;
-    public float HeadingTransitionRemaining => headingResponseTime == headingResponseDuration
-        ? headingTransitionRemaining : headingResponseTime;
     private float navigationSpeedTarget;
     private float navigationTransitionRemaining, navigationResponseDuration;
-    public float NavigationTargetSpeed => navigationSpeedTarget;
-    public float SpeedTransitionRemaining => speedResponseTime == navigationResponseDuration
-        ? navigationTransitionRemaining : speedResponseTime;
 
     // Speed ramps linearly; heading uses a cubic with continuous yaw and zero yaw at arrival.
     public void SetNavigationTarget(float targetSpeed, float targetHeadingDeg)

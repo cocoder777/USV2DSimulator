@@ -3,7 +3,6 @@ using Newtonsoft.Json.Linq;
 
 public static class ObservationBuilder
 {
-    // Synthetic small-area geographic frame: Unity +X east, +Y north, 1 unit = 1 metre.
     public const double OriginLon = 120.5, OriginLat = 30.2, EarthRadius = 6378137;
     private static JArray LonLat(double x, double y) => new JArray(
         Math.Round(OriginLon + x / (EarthRadius * Math.Cos(OriginLat * Math.PI / 180)) * 180 / Math.PI, 8),
@@ -14,32 +13,36 @@ public static class ObservationBuilder
         if (mission?.Route == null || mission.Progress.Next == null)
             throw new InvalidOperationException("No active task.");
         var route = mission.Route;
-        var samples = new JArray();
-        foreach (var p in route.GetReferenceSamples()) samples.Add(LonLat(p.x, p.y));
+        var position = LonLat(boat.Position.x, boat.Position.y);
         var waypoints = new JArray();
-        foreach (var p in route.waypoints) waypoints.Add(LonLat(p.x, p.y));
+        foreach (var p in route.waypoints)
+        {
+            var coordinates = LonLat(p.x, p.y);
+            waypoints.Add(new JObject { ["routeLon"] = coordinates[0].DeepClone(),
+                ["routeLat"] = coordinates[1].DeepClone(), ["routeSpeed"] = p.routeSpeed });
+        }
         var speeds = new JArray();
-        for (int i = 0; i < 8; i++) speeds.Add(DiscreteAction.Speed(i, boat));
+        for (int i = 0; i < 8; i++) speeds.Add(DiscreteAction.Speed(i, boat) / DiscreteAction.MetresPerSecondPerKnot);
+        // Velocity direction is not bow direction. At rest no course is available.
+        float course = UnityEngine.Mathf.Repeat(90f - boat.HeadingDeg + (boat.Speed < 0 ? 180 : 0), 360);
         return new JObject {
             ["planning"] = new JObject { ["action_duration_s"] = actionDuration,
                 ["simulation_paused_while_deciding"] = true },
-            ["action_space"] = new JObject { ["speeds_mps"] = speeds,
-                ["heading_offsets_deg"] = new JArray(DiscreteAction.HeadingOffsetsDeg) },
-            ["boat"] = new JObject { ["lon_lat"] = LonLat(boat.Position.x, boat.Position.y),
-                ["heading_deg"] = boat.HeadingDeg, ["speed_mps"] = boat.Speed, ["yaw_rate_deg_s"] = boat.YawRateDeg },
-            ["response"] = new JObject { ["speed_transition_time_s"] = boat.speedResponseTime,
-                ["active_target_speed_mps"] = boat.NavigationTargetSpeed,
-                ["remaining_transition_s"] = boat.SpeedTransitionRemaining },
-            ["heading_response"] = new JObject { ["transition_time_s"] = boat.headingResponseTime,
-                ["active_target_offset_deg"] = boat.HeadingTargetOffset,
-                ["remaining_transition_s"] = boat.HeadingTransitionRemaining },
-            ["fixed_dt_s"] = UnityEngine.Time.fixedDeltaTime,
+            ["action_space"] = new JObject { ["speeds_knots"] = speeds,
+                ["courses_deg"] = new JArray(DiscreteAction.CoursesDeg) },
+            ["boat"] = new JObject { ["longitude"] = position[0].DeepClone(),
+                ["latitude"] = position[1].DeepClone(),
+                ["targetCourse"] = Math.Abs(boat.Speed) < 0.000001f ? JValue.CreateNull() : new JValue(course),
+                ["targetSpeed"] = boat.Speed / DiscreteAction.MetresPerSecondPerKnot },
+            // Known simulator configuration, not extra measured ship state.
+            ["execution"] = new JObject { ["speed_transition_time_s"] = boat.speedResponseTime,
+                ["course_transition_time_s"] = boat.headingResponseTime },
             ["task"] = new JObject {
-                ["planRouteNum"] = mission.MapLevel, ["route_id"] = route.route_id,
+                ["planRouteNum"] = mission.MapLevel,
                 ["currentRoute"] = Math.Max(0, mission.Progress.NextIndex - 1),
                 ["next_waypoint_index"] = mission.Progress.NextIndex,
                 ["planWaypointNum"] = route.waypoints.Length, ["planWaypointList"] = waypoints,
-                ["reference_lon_lat"] = samples, ["origin_lon_lat"] = new JArray(OriginLon, OriginLat),
+                ["routeSpeed_unit"] = "m/s",
                 ["arrival_radius_m"] = route.arrival_radius_m, ["stop_speed_mps"] = route.stop_speed_mps }
         };
     }

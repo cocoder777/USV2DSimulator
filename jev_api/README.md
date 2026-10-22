@@ -42,4 +42,4 @@ API 为 `POST https://api.typesafe.ai/v1/systemone`，默认模型 `jev-latest`�
 python -m unittest discover -s jev_api/tests -v
 ```
 
-实际运行通过 Unity 界面选择地图和启动 Jev，见[项目 README](../README.md)。后续事项见[代办清单](../docs/bian/Jev请求优化代办清单.md)。
+实际运行通过 Unity 界面选择地图和启动 Jev，见[项目 README](../README.md)。后续事项见本地[代办清单](../docs/bian_local/Jev请求优化代办清单.md)（不纳入版本控制）。

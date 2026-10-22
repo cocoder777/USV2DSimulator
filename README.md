@@ -46,5 +46,5 @@ python Tools/configure_trajectory_plot.py
 
 - [Python 客户端结构与请求内容](jev_api/README.md)
 - [当前控制与通信协议](docs/bian/当前控制与Jev协议.md)
-- [Jev 请求优化代办清单](docs/bian/Jev请求优化代办清单.md)
+- 本地 [Jev 请求优化代办清单](docs/bian_local/Jev请求优化代办清单.md)（不纳入版本控制）
 - [甲方对接说明](docs/甲方接口/对接单艇决策服务.md)

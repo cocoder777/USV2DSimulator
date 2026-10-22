@@ -37,12 +37,20 @@ BACKGROUND = (
     "No obstacles, wind or sideways drift are simulated. The world pauses while you decide. "
     "Each waypoint has a MAXIMUM permitted actual speed while passing its circle; this is only a ceiling, "
     "not a desired speed or a speed to match. Slower is allowed. "
+    "A waypoint ceiling applies ONLY inside that waypoint's arrival circle, including until exit after passing. "
+    "Outside active waypoint circles, actual and commanded speeds may exceed the next waypoint's ceiling. "
+    "Subject to these local ceilings and the final stop requirement, minimize total simulated time to complete the route. "
     "You choose one nonnegative target ground speed and one ABSOLUTE course, clockwise from north. "
     "The simulator actuator turns the boat smoothly; a course command is not an instantaneous movement direction."
 )
 INSTRUCTIONS = (
     "Choose ONE command. Treat a predicted passing_speed_above_ceiling=true as a violation to avoid. "
     "Speed ceilings are mandatory and take priority over faster progress. An EXCEEDS warning must not be traded for speed. "
+    "Among safe choices, actively minimize remaining route completion time: accelerate for transit, brake before entry, "
+    "pass intermediate circles without unnecessary stopping, and accelerate again after exiting. "
+    "Do NOT use the next waypoint's passing ceiling as a speed cap for the entire leg. "
+    "Outside active circles, choose higher available transit speeds when enough distance remains "
+    "to slow to the next waypoint's passing ceiling BEFORE entry, with margin. "
     "If excess is already unavoidable from current motion, brake strongly to reduce it rather than accelerate. "
     "Never accelerate hard near a circle merely because this single action stops short of entering it. "
     "Use the longer same-command preview to anticipate the following action. "
@@ -63,8 +71,10 @@ INSTRUCTIONS = (
     "A stopped boat outside the final circle must approach instead of repeatedly stopping. "
     "Avoid needless stops, crawling, detours or alternating large course changes. "
     "After a turn settles, increase speed again when feasible; do not keep the slowest startup speed for a long clear approach. "
-    "Among commands that respect active speed ceilings and reach the correct circle, compare distance_reduction_m: "
-    "prefer useful larger progress over repeatedly crawling for a negligible endpoint improvement. "
+    "A useful transit command need not reach the circle in this action. Compare safe candidates' distance reduction "
+    "over the same action duration, while accounting for the braking needed afterward. "
+    "Prefer faster useful progress when braking remains feasible; choosing a slower available speed needs a reason "
+    "such as an active circle ceiling, braking distance, turning uncertainty or final parking. "
     "Travel fast when far enough away, aligned, and able to brake before the next circle; slow for turns or nearby targets. "
     "For an off-axis target, diagonal motion or alternating adjacent compass headings can reach it. "
     "Inspect the predicted endpoint distance and entry facts, but these are APPROXIMATIONS from ground velocity: "
@@ -210,7 +220,11 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
         )
     if command["speed_mps"] == 0:
         text += "This is BRAKING TO STOP, not instant stopping; its course value is ignored by the simulator. "
-    text += "Choose when this movement respects active speed ceilings, reaches the required circle and makes efficient progress."
+    text += (
+        "Choose when this movement respects active circle ceilings, leaves room to brake before entry, "
+        "and reduces route completion time. Transit above the next circle's ceiling is allowed outside active circles; "
+        "this action need not reach the circle."
+    )
     return text
 
 

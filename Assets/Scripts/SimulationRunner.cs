@@ -6,12 +6,13 @@ using UnityEngine;
 [RequireComponent(typeof(BoatDynamics2D), typeof(MissionManager), typeof(BoatActionExecutor))]
 public sealed class SimulationRunner : MonoBehaviour
 {
-    public enum RunState { Initializing, Manual, Ready, Waiting, Executing, Completed, Failed }
+    public enum RunState { Initializing, Manual, Ready, Waiting, Executing, Completed, Failed, Stopped }
     public enum DecisionTimingMode { Paused, Continuous }
     public DecisionTimingMode DecisionMode { get; private set; } = DecisionTimingMode.Paused;
     public bool PauseWhileDeciding => DecisionMode == DecisionTimingMode.Paused;
     public bool CanChangeDecisionMode => false;
     public bool JevStarted { get; private set; }
+    public bool StopRequested { get; private set; }
     [Min(0.02f)] public float actionDuration = 0.4f;
     public RunState State { get; private set; } = RunState.Initializing;
     public string LastError { get; private set; }
@@ -53,9 +54,15 @@ public sealed class SimulationRunner : MonoBehaviour
     public void StartJev()
     {
         if (boat.Mode != BoatDynamics2D.ControlMode.Jev || mission.Progress == null || mission.Progress.Completed) return;
-        Invalidate(); JevStarted = true; Pump();
+        Invalidate(); StopRequested = false; JevStarted = true; Pump();
     }
-    public void StopJev() { JevStarted = false; Invalidate(); }
+    public void RequestImmediateStop()
+    {
+        if (boat.Mode != BoatDynamics2D.ControlMode.Jev || !JevStarted || StopRequested
+            || mission.Progress == null || mission.Progress.Completed) return;
+        Invalidate(); StopRequested = true; BeginDecision();
+    }
+    public void StopJev() { JevStarted = false; StopRequested = false; Invalidate(); }
     public void Retry() { Invalidate(); }
     // 预留统一设置入口；不暂停调度尚未实现，不能只切换标签或协议标志。
     public bool TrySetDecisionMode(DecisionTimingMode mode)
@@ -81,7 +88,7 @@ public sealed class SimulationRunner : MonoBehaviour
         { CompleteMission(); return; }
         if (boat.Mode != BoatDynamics2D.ControlMode.Jev)
         { State = RunState.Manual; return; }
-        if (!JevStarted) { State = RunState.Ready; return; }
+        if (!JevStarted) { if (State != RunState.Stopped) State = RunState.Ready; return; }
         if (State == RunState.Failed) return;
         if (identity != null && (identity != Identity() || parameters != Parameters())) Invalidate();
         if (!player.HasAction && State != RunState.Waiting) BeginDecision();
@@ -94,8 +101,10 @@ public sealed class SimulationRunner : MonoBehaviour
             DiscreteAction.Steps(actionDuration, Time.fixedDeltaTime);
             requestedDuration = actionDuration; requestTick = boat.Tick;
             identity = Identity(); parameters = Parameters(); DecisionId = Guid.NewGuid().ToString("N");
-            var observation = ObservationBuilder.ForModel(boat, mission, requestedDuration);
-            var packet = Envelope("decision_request"); packet["observation"] = observation;
+            var observation = StopRequested
+                ? ObservationBuilder.ForStop(boat, mission, requestedDuration)
+                : ObservationBuilder.ForModel(boat, mission, requestedDuration);
+            var packet = Envelope(StopRequested ? "stop_request" : "decision_request"); packet["observation"] = observation;
             bridge.QueuePacket(packet);
             State = RunState.Waiting;
         }
@@ -156,9 +165,16 @@ public sealed class SimulationRunner : MonoBehaviour
             catch (Exception error) { Fail(error.Message); return false; }
         }
         Vector2 previous = boat.Position; float previousSpeed = boat.Speed;
-        boat.Step(dt); mission.Evaluate(previous, previousSpeed);
+        boat.Step(dt);
+        if (!StopRequested) mission.Evaluate(previous, previousSpeed);
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
         { player.FinishStep(); if (!player.HasAction) State = RunState.Initializing; }
+        if (StopRequested && Mathf.Abs(boat.Speed) <= ObservationBuilder.ImmediateStopSpeedMps)
+        {
+            player.Cancel(); bridge?.CancelDecisionRequest();
+            DecisionId = null; identity = null; StopRequested = false;
+            JevStarted = false; State = RunState.Stopped;
+        }
         if (mission.Progress.Completed) CompleteMission();
         StepCompleted?.Invoke();
         return true;

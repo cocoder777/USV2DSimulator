@@ -99,7 +99,7 @@ public class BoatUdpBridge : MonoBehaviour
             int count = outgoing.Count;
             for (int i = 0; i < count; i++) {
                 var packet = outgoing.Dequeue();
-                if (packet.type != "decision_request") outgoing.Enqueue(packet);
+                if (packet.type != "decision_request" && packet.type != "stop_request") outgoing.Enqueue(packet);
             }
         }
     }

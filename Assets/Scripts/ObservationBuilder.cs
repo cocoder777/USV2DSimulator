@@ -4,6 +4,15 @@ using Newtonsoft.Json.Linq;
 public static class ObservationBuilder
 {
     public const double OriginLon = 120.5, OriginLat = 30.2, EarthRadius = 6378137;
+    public const float ImmediateStopSpeedMps = 0.000001f;
+
+    public static JObject ForStop(BoatDynamics2D boat, MissionManager mission, float actionDuration)
+    {
+        var observation = ForModel(boat, mission, actionDuration);
+        observation["task"] = new JObject {
+            ["mode"] = "immediate_stop", ["stop_speed_mps"] = ImmediateStopSpeedMps };
+        return observation;
+    }
     private static JArray LonLat(double x, double y) => new JArray(
         Math.Round(OriginLon + x / (EarthRadius * Math.Cos(OriginLat * Math.PI / 180)) * 180 / Math.PI, 8),
         Math.Round(OriginLat + y / EarthRadius * 180 / Math.PI, 8));

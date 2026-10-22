@@ -87,6 +87,12 @@ public class BoatParameterPanel : MonoBehaviour
             GUILayout.Label("Set duration before starting. Reset to change it.", hintStyle);
             if (boat.Mode == BoatDynamics2D.ControlMode.Jev && !runner.JevStarted
                 && GUILayout.Button("Start Jev", GUILayout.Height(28))) runner.StartJev();
+            GUI.enabled = enabled && boat.Mode == BoatDynamics2D.ControlMode.Jev
+                && runner.JevStarted && !runner.StopRequested && mission?.Progress != null
+                && !mission.Progress.Completed;
+            if (GUILayout.Button("Stop via Jev", GUILayout.Height(28))) runner.RequestImmediateStop();
+            GUI.enabled = enabled;
+            if (runner.StopRequested) GUILayout.Label("Jev stop requested: braking in place.", hintStyle);
             GUILayout.Space(8);
         }
         var trajectory = GetComponent<BoatTrajectoryRecorder>();

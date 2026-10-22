@@ -19,7 +19,7 @@ def dumps(value):
 def valid_request(packet):
     if (
         not isinstance(packet, dict)
-        or packet.get("type") != "decision_request"
+        or packet.get("type") not in ("decision_request", "stop_request")
     ):
         return False
     if any(
@@ -72,6 +72,14 @@ def valid_request(packet):
             or not all(finite(v) and v >= 0 for v in speeds)
             or not all(finite(v) and 0 <= v < 360 for v in courses)
         ):
+            return False
+        if packet["type"] == "stop_request":
+            return (
+                task.get("mode") == "immediate_stop"
+                and finite(task["stop_speed_mps"])
+                and task["stop_speed_mps"] >= 0
+            )
+        if task.get("mode") == "immediate_stop":
             return False
         if type(task["planWaypointNum"]) is not int or task["planWaypointNum"] != len(
             task["planWaypointList"]

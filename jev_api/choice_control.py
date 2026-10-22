@@ -214,7 +214,71 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
     return text
 
 
+def build_stop_payload(observation, model="jev-latest"):
+    """立即停车任务；复用原 64 个 Choice 和解码，不依赖航路点。"""
+    boat = observation["boat"]
+    duration = observation["planning"]["action_duration_s"]
+    execution = observation["execution"]
+    speed = abs(boat["targetSpeed"]) * KNOT_MPS
+    course = boat["targetCourse"]
+    criteria = {}
+    for name, (i, j) in ACTION_CHOICES.items():
+        target_speed = observation["action_space"]["speeds_knots"][i] * KNOT_MPS
+        target_course = observation["action_space"]["courses_deg"][j]
+        motion = predict_ground_motion(
+            speed, course, target_speed, target_course,
+            execution["speed_transition_time_s"],
+            execution["course_transition_time_s"], duration,
+        )
+        criteria[name] = (
+            f"Set target ground speed {target_speed:.3f} m/s, absolute course "
+            f"{target_course:.0f} degrees ({DIRECTIONS[j]}). "
+            f"Approximate motion over {duration:.3f} s: endpoint "
+            f"{position_text(motion['endpoint'])}; end speed {motion['end_speed']:.3f} m/s. "
+            + ("Zero target speed brakes over time; the simulator keeps the received bow direction. "
+               if target_speed == 0 else "")
+        )
+    return {
+        "model": model,
+        "state": {
+            "task": {
+                "stage": "immediate_stop",
+                "background": "A stop request has replaced waypoint navigation. Stop the boat as soon as possible at its present location.",
+                "stop_speed_threshold_mps": observation["task"]["stop_speed_mps"],
+            },
+            "boat": {
+                "actual_speed_mps": round(speed, 6),
+                "movement_course_deg_clockwise_from_north": course,
+                "course_available": course is not None,
+            },
+            "execution": {
+                "duration_s": duration,
+                **execution,
+                "frame": "Fixed east/north; course 0=N,90=E,180=S,270=W.",
+                "forecast": "Approximate ground-velocity forecast; bow direction, yaw rate and actuator progress are unavailable.",
+            },
+        },
+        "questions": {
+            "action": {
+                "type": "choice",
+                "instructions": (
+                    "Choose ONE command to stop immediately, minimizing further travel. "
+                    "Choose a zero target speed to brake and keep it zero once stopped. "
+                    "Do not approach any waypoint or final circle, resume navigation, or accelerate to make progress. "
+                    "Stopping has no position or arrival-circle requirement. "
+                    "The simulator ignores the course of a zero-speed command and brakes over its speed transition time; "
+                    "this does not instantly set actual speed to zero. "
+                    "All original 64 choices remain available; no local controller chooses for you."
+                ),
+                "criteria": criteria,
+            }
+        },
+    }
+
+
 def build_payload(observation, model="jev-latest"):
+    if observation["task"].get("mode") == "immediate_stop":
+        return build_stop_payload(observation, model)
     geometry = WaypointGeometry(observation)
     task, boat = observation["task"], observation["boat"]
     execution = observation["execution"]

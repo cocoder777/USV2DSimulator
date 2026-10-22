@@ -32,7 +32,8 @@ def position_text(point):
 
 BACKGROUND = (
     "Navigate a boat through mandatory waypoint circles IN ORDER, then stop inside the final circle. "
-    "There is no prescribed path between points: choose your own efficient path. "
+    "There is no prescribed path between points. Prefer a direct, nearly straight approach to the CURRENT waypoint "
+    "with minimal unnecessary turning, rather than a curved, zigzag or axis-by-axis route. "
     "All positions and directions use FIXED geographic east/north axes, NEVER the bow or camera. "
     "No obstacles, wind or sideways drift are simulated. The world pauses while you decide. "
     "Each waypoint has a MAXIMUM permitted actual speed while passing its circle; this is only a ceiling, "
@@ -46,6 +47,17 @@ BACKGROUND = (
 INSTRUCTIONS = (
     "Choose ONE command. Treat a predicted passing_speed_above_ceiling=true as a violation to avoid. "
     "Speed ceilings are mandatory and take priority over faster progress. An EXCEEDS warning must not be traded for speed. "
+    "Subject to safe passing and stopping, prioritize a direct, nearly straight path toward the current waypoint. "
+    "Use target.direct_course_deg_clockwise_from_north as the direct bearing, then choose an available course closest to it. "
+    "Account for the turn transition: prefer a motion that settles toward the target, not merely a slightly nearer endpoint. "
+    "Keep a useful course steady while it still leads into the arrival circle; do not chase the exact center with repeated left/right corrections. "
+    "When turning is needed, make a deliberate correction, allow it to settle, then hold the useful course. "
+    "Look ahead for lateral overshoot: do not hold a diagonal until one coordinate passes the target while the other remains far away. "
+    "Correct toward the adjacent useful course BEFORE that overshoot, reducing speed if the turn cannot settle in time. "
+    "Brake by reducing target SPEED, not by steering away from the waypoint. Do not choose an opposite or sideways "
+    "course as a substitute for braking; keep aiming toward the arrival circle while slowing. "
+    "Do not complete all east/west travel first and then all north/south travel when a diagonal approach is more direct. "
+    "Avoid repeated course reversals or lateral excursions just to gain a small amount of one-action progress. "
     "Among safe choices, actively minimize remaining route completion time: accelerate for transit, brake before entry, "
     "pass intermediate circles without unnecessary stopping, and accelerate again after exiting. "
     "Do NOT use the next waypoint's passing ceiling as a speed cap for the entire leg. "
@@ -55,6 +67,9 @@ INSTRUCTIONS = (
     "Never accelerate hard near a circle merely because this single action stops short of entering it. "
     "Use the longer same-command preview to anticipate the following action. "
     "On final approach use a slow controlled entry under its ceiling, then stop. "
+    "Once braking for final entry, do not accelerate again merely to reach the center faster. "
+    "A direct path never justifies a speed violation: if a candidate predicts EXCEEDS, prefer a safe braking action "
+    "even if its distance reduction is smaller or temporarily negative. "
     "Do not stop far outside and then restart at full speed: approach at a low nonzero speed instead. "
     "First pass the current mandatory circle without exceeding its speed ceiling. "
     "Future points are previews only; never skip the current point. "
@@ -76,7 +91,10 @@ INSTRUCTIONS = (
     "Prefer faster useful progress when braking remains feasible; choosing a slower available speed needs a reason "
     "such as an active circle ceiling, braking distance, turning uncertainty or final parking. "
     "Travel fast when far enough away, aligned, and able to brake before the next circle; slow for turns or nearby targets. "
-    "For an off-axis target, diagonal motion or alternating adjacent compass headings can reach it. "
+    "Only eight compass courses are available, so an exact straight bearing may be unavailable. "
+    "Use adjacent courses that bracket the direct bearing when necessary, with timely small corrections rather than long "
+    "off-bearing runs followed by large recovery turns. Hold a course only while its predicted motion remains useful. "
+    "A course change after passing a waypoint is appropriate for the next leg; do not turn early toward a future point. "
     "Inspect the predicted endpoint distance and entry facts, but these are APPROXIMATIONS from ground velocity: "
     "bow direction, yaw rate and actuator progress are unavailable. In particular startup and sharp turns may differ. "
     "If the waypoint is behind the current movement, slow before turning back. "
@@ -177,7 +195,10 @@ def _candidate_facts(
 
 def _describe_candidate(command, effect, duration, distance, limit, previous_limit):
     preview = effect["same_command_preview"]
-    text = (
+    text = ""
+    if effect["passing_speed_above_ceiling"] or effect.get("previous_circle_speed_above_ceiling", False):
+        text += "SPEED VIOLATION predicted during this action. Avoid; if unavoidable, brake to minimize excess. "
+    text += (
         f"Set target ground speed {command['speed_mps']:.3f} m/s, absolute course {command['absolute_course_deg']:.0f} degrees ({command['direction']}). "
         f"Approximate motion over {duration:.3f} s: midpoint {effect['midpoint']}; endpoint {effect['endpoint']}; end speed {effect['end_speed_mps']:.3f} m/s. "
         f"Target distance {distance:.3f} -> {effect['end_checkpoint_distance_m']:.3f} m; distance reduction {effect['distance_reduction_m']:.3f} m. "
@@ -222,8 +243,9 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
         text += "This is BRAKING TO STOP, not instant stopping; its course value is ignored by the simulator. "
     text += (
         "Choose when this movement respects active circle ceilings, leaves room to brake before entry, "
-        "and reduces route completion time. Transit above the next circle's ceiling is allowed outside active circles; "
-        "this action need not reach the circle."
+        "and makes direct progress with little lateral overshoot or corrective turning. "
+        "Transit above the next circle's ceiling is allowed outside active circles; "
+        "this action need not reach the circle. Speed safety and final braking take priority over path and time."
     )
     return text
 
@@ -326,6 +348,10 @@ def build_payload(observation, model="jev-latest"):
         },
         "target": {
             "position": position_text(target),
+            "direct_course_deg_clockwise_from_north": (
+                round(math.degrees(math.atan2(target[0], target[1])) % 360, 3)
+                if distance > 1e-6 else None
+            ),
             "distance_m": round(distance, 3),
             "arrival_radius_m": task["arrival_radius_m"],
             "inside_arrival_circle": distance <= task["arrival_radius_m"],

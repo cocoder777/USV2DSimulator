@@ -16,7 +16,7 @@
     "speed": 0.0,
     "yaw_rate_deg": 0.0
   },
-  "arrival_radius_m": 1.0,
+  "arrival_radius_m": 0.3,
   "stop_speed_mps": 0.1,
   "waypoints": [
     {

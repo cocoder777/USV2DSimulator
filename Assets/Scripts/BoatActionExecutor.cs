@@ -16,7 +16,7 @@ public sealed class BoatActionExecutor : MonoBehaviour
     public void AcceptAction(DiscreteBoatAction command, float actionDuration, float dt)
     {
         DiscreteAction.Validate(command);
-        if (command.speed * DiscreteAction.MetresPerSecondPerKnot > boat.maxForwardSpeed + 0.00001f)
+        if (command.speed * DiscreteAction.MetresPerSecondPerKnot > boat.maxForwardSpeed + 0.0051f * DiscreteAction.MetresPerSecondPerKnot)
             throw new FormatException("Target speed exceeds the boat limit.");
         remainingSteps = DiscreteAction.Steps(actionDuration, dt);
         action = new DiscreteBoatAction {

@@ -35,6 +35,7 @@ def observation(level=0):
     )
     route = json.loads(p.read_text(encoding="utf-8-sig"))
     return {
+        "model_speed_unit": "mps",
         "planning": {
             "action_duration_s": 0.4,
             "simulation_paused_while_deciding": True,
@@ -192,7 +193,7 @@ class NavigationTests(unittest.TestCase):
         obs = observation(4)
         obs["task"]["next_waypoint_index"] = 2
         previous = obs["task"]["planWaypointList"][1]
-        lon, lat = geo(6.0, 0)
+        lon, lat = previous["routeLon"], previous["routeLat"]
         obs["boat"].update(
             longitude=lon, latitude=lat, targetSpeed=1 / KNOT_MPS, targetCourse=90
         )

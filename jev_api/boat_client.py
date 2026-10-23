@@ -4,12 +4,14 @@ import argparse
 import json
 import math
 import socket
+import select
+from tools.client_protocol import (TASK, CONTROL, STATUS, STOP, SITUATION, Reassembler,
+    UnitySnapshotAdapter, parse_header, decode_situation, json_packets, control_packet, timestamp)
 
 from decision_worker import DecisionScheduler, IDENTITY_FIELDS
 from tools.waypoint_geometry import WaypointGeometry
 
 API_KEY = "apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141"
-MAX_PACKET = 65000
 
 
 def dumps(value):
@@ -55,6 +57,29 @@ def valid_request(packet):
             return False
         if not -180 <= boat["longitude"] <= 180 or not -90 <= boat["latitude"] <= 90:
             return False
+        hull = boat.get("collision_radius_m", 0.5)
+        if not finite(hull) or hull <= 0:
+            return False
+        obstacles = obs.get("obstacles", [])
+        if not isinstance(obstacles, list):
+            return False
+        ids = set()
+        for obstacle in obstacles:
+            if not isinstance(obstacle, dict):
+                return False
+            identifier = obstacle.get("id")
+            if not isinstance(identifier, str) or not identifier or identifier in ids:
+                return False
+            ids.add(identifier)
+            obstacle_speed, obstacle_course = obstacle.get("targetSpeed"), obstacle.get("targetCourse")
+            if obstacle_speed is not None and not finite(obstacle_speed):
+                return False
+            if obstacle_course is not None and (not finite(obstacle_course) or not 0 <= obstacle_course < 360):
+                return False
+            if (not all(finite(obstacle[k]) for k in ("longitude", "latitude", "radius_m"))
+                or not -180 <= obstacle["longitude"] <= 180
+                or not -90 <= obstacle["latitude"] <= 90 or obstacle["radius_m"] <= 0):
+                return False
         course = boat["targetCourse"]
         if course is not None and (not finite(course) or not 0 <= course < 360):
             return False
@@ -112,29 +137,6 @@ def valid_request(packet):
         return False
 
 
-def receive_packet(sock, endpoint):
-    """只接收约定 Unity 地址的合法 JSON；无消息时返回 None。"""
-    try:
-        data, source = sock.recvfrom(MAX_PACKET + 1)
-    except socket.timeout:
-        return None
-    except OSError as error:
-        if getattr(error, "winerror", None) in (10040, 10054):
-            return None
-        raise
-    if source != endpoint or len(data) > MAX_PACKET:
-        return None
-    try:
-        packet = json.loads(data.decode("utf-8"), parse_constant=reject_constant)
-        return packet if isinstance(packet, dict) else None
-    except (ValueError, UnicodeError):
-        return None
-
-
-def reject_constant(value):
-    raise ValueError("Non-finite JSON number: " + value)
-
-
 def report_decision(record, log):
     """完整记录写文件，终端只显示便于比较的耗时和连接状态。"""
     if log:
@@ -179,69 +181,119 @@ def report_decision(record, log):
     )
 
 
-def valid_completion(packet):
-    return (
-        packet.get("type") == "mission_completed"
-        and all(
-            isinstance(packet.get(field), str) and packet[field]
-            for field in IDENTITY_FIELDS[:3]
-        )
-        and type(packet.get("tick")) is int
-        and packet["tick"] >= 0
-    )
-
-
-def record_completion(packet, log):
-    record = {"event": "completed", "notification": packet}
-    if log:
-        log.write(dumps(record) + "\n")
-        log.flush()
-    print(dumps(record), flush=True)
-
-
 def serve(settings):
+    """正式帧收发；unity_only 负责暂停采样屏障，核心 worker 只处理决策。"""
     endpoint = (socket.gethostbyname(settings.host), settings.port)
     log = open(settings.log, "a", encoding="utf-8") if settings.log else None
     scheduler = DecisionScheduler(settings, API_KEY)
+    adapter = UnitySnapshotAdapter(settings.jev_speed_unit)
+    assembler = Reassembler()
+    active = {}
+    last_control_stamp = 0
+
+    def send_status(sock, task, status, description, result=None, control_stamp=None):
+        params = {"currentRoute": task.get("params", {}).get("currentRoute", task.get("unity_only", {}).get("currentRoute", 0))}
+        if result is not None:
+            params["unity_only"] = {"result": result}
+            if control_stamp is not None:
+                params["unity_only"]["control_timestamp"] = control_stamp
+        content = {k: task[k] for k in ("simId", "id", "code")}
+        content.update(status=status, description=description, params=params)
+        for data in json_packets(content, STATUS):
+            sock.sendto(data, endpoint)
+
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock, socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as multicast:
             if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             sock.bind((settings.listen_host, settings.listen_port))
             if hasattr(socket, "SIO_UDP_CONNRESET"):
                 sock.ioctl(socket.SIO_UDP_CONNRESET, False)
-            sock.settimeout(0.01)
-            print(
-                "Preparing HTTPS connections; no decision request is sent...",
-                flush=True,
-            )
+            multicast.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            multicast.bind(("", settings.situation_port))
+            multicast.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                socket.inet_aton(settings.situation_group) + socket.inet_aton(settings.multicast_interface))
             for record in scheduler.prepare_connections():
                 if log:
-                    log.write(dumps(record) + "\n")
-                    log.flush()
+                    log.write(dumps(record) + "\n"); log.flush()
                 print(dumps(record), flush=True)
-            print(
-                f"Jev worker listening on {settings.listen_host}:{settings.listen_port}; Unity={endpoint}; workers={settings.workers}",
-                flush=True,
-            )
+            print(f"Jev worker listening on {settings.listen_host}:{settings.listen_port}; Unity={endpoint}; situation={settings.situation_group}:{settings.situation_port}", flush=True)
             while True:
-                # API 不阻塞 UDP；每份结果只发一次，不主动重发，也不等待 ACK。
-                # 检查有没有完成的决策，如果完成的通过UDP交给unity
                 for record in scheduler.collect_results():
                     report_decision(record, log)
-                    sock.sendto(dumps(record["result"]).encode("utf-8"), endpoint)
-                # 接收unity消息
-                packet = receive_packet(sock, endpoint)
-                if packet is None:
+                    task = record["request"]["wire_task"]
+                    key = task["simId"], task["id"]
+                    result = record["result"]
+                    if active.get(key) != result["decision_id"]:
+                        continue
+                    if result["type"] == "decision_error":
+                        send_status(sock, task, 3, result["error"], result)
+                    else:
+                        stamp = timestamp(False)
+                        if stamp <= last_control_stamp and last_control_stamp - stamp < 1000:
+                            stamp = last_control_stamp + 1
+                        last_control_stamp = stamp
+                        try:
+                            platform = task.get("params", {}).get("platCode", task["unity_only"].get("platCode"))
+                            data = control_packet(platform, **result["action"], stamp=stamp)
+                        except (ValueError, OverflowError) as error:
+                            failed = dict(result, type="decision_error", error=str(error))
+                            send_status(sock, task, 3, str(error), failed)
+                            continue
+                        sock.sendto(data, endpoint)
+                        send_status(sock, task, 1, "tracking" if record["request"]["type"] == "decision_request" else "stopping", result, stamp)
+                readable, _, _ = select.select([sock, multicast], [], [], .01)
+                for channel in readable:
+                    try:
+                        data, source = channel.recvfrom(65507)
+                        # Local validation profile: only the configured Unity sender supplies snapshots.
+                        if source != endpoint:
+                            continue
+                        kind, _, _, _ = parse_header(data)
+                        if kind == SITUATION:
+                            adapter.add_situation(decode_situation(data))
+                            continue
+                        if channel is multicast or kind not in (TASK, STOP):
+                            continue
+                        task = assembler.add(data, source)
+                        if task is None:
+                            continue
+                        local = task.get("unity_only", {})
+                        event = local.get("event")
+                        key = task["simId"], task["id"]
+                        if event in ("mission_completed", "stop_completed", "simulation_collision", "simulation_cancelled"):
+                            active.pop(key, None)
+                            adapter.waiting.pop(key, None)
+                            if event in ("mission_completed", "stop_completed"):
+                                send_status(sock, task, 2, "completed" if event == "mission_completed" else "stopped")
+                            if log:
+                                log.write(dumps({"event": event, "notification": task}) + "\n"); log.flush()
+                            if settings.exit_on_complete and event == "mission_completed":
+                                return
+                            continue
+                        adapter.add_task(task, kind)
+                        active[key] = local["decision_id"]
+                    except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:
+                        print(dumps({"event": "invalid_packet", "error": str(error)}), flush=True)
+                try:
+                    ready = adapter.ready()
+                except (ValueError, KeyError, TypeError, OverflowError) as error:
+                    # Reject malformed business data without terminating UDP reception.
+                    print(dumps({"event": "invalid_observation", "error": str(error)}), flush=True)
+                    adapter.waiting.clear()
                     continue
-                # 如果收到的是决策请求
-                if valid_request(packet):
-                    scheduler.submit(packet)
-                # 完成通知始终记录，参数只决定是否退出客户端。
-                elif valid_completion(packet):
-                    record_completion(packet, log)
-                    if settings.exit_on_complete:
-                        return
+                for task, packet, error in ready:
+                    local = task["unity_only"]
+                    if error is None and not valid_request(packet):
+                        error = "Invalid decision observation"
+                    if error:
+                        result = {k: local[k] for k in IDENTITY_FIELDS}
+                        result.update(type="decision_error", error=error)
+                        send_status(sock, task, 3, error, result)
+                    else:
+                        packet["wire_task"] = task
+                        if scheduler.submit(packet):
+                            send_status(sock, task, 1, "processing")
     finally:
         scheduler.close()
         if log:
@@ -254,6 +306,11 @@ def main():
     parser.add_argument("--port", type=int, default=5005)
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", type=int, default=5006)
+    parser.add_argument("--situation-group", default="239.255.0.10")
+    parser.add_argument("--situation-port", type=int, default=18010)
+    parser.add_argument("--multicast-interface", default="127.0.0.1")
+    parser.add_argument("--jev-speed-unit", choices=("knots", "mps"), default="knots",
+                        help="Jev presentation only; all protocol speeds remain knots")
     parser.add_argument("--model", default="jev-latest")
     parser.add_argument("--endpoint", default="https://api.typesafe.ai/v1/systemone")
     parser.add_argument(
@@ -271,7 +328,7 @@ def main():
     parser.add_argument("--log")
     parser.add_argument("--exit-on-complete", action="store_true")
     settings = parser.parse_args()
-    if any(not 1 <= p <= 65535 for p in (settings.port, settings.listen_port)):
+    if any(not 1 <= p <= 65535 for p in (settings.port, settings.listen_port, settings.situation_port)):
         parser.error("Ports must be 1..65535")
     if settings.workers < 1:
         parser.error("Workers must be positive")

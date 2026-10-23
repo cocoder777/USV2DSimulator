@@ -1,8 +1,12 @@
-"""Jev chooses ground-speed/course commands using waypoint-only global observations."""
+"""Jev chooses ground-speed/course commands from global navigation observations."""
 
 import math
+from tools.model_units import model_speed_units
 from tools.waypoint_geometry import WaypointGeometry, KNOT_MPS
 from tools.navigation_motion import predict_ground_motion
+from tools.obstacle_geometry import (
+    nearby_obstacles, describe_clearance, add_obstacle_state, AVOIDANCE_INSTRUCTIONS,
+)
 
 DIRECTIONS = (
     "north",
@@ -103,6 +107,18 @@ INSTRUCTIONS = (
 )
 
 
+# Navigation-specific wording: the immediate-stop request keeps its existing instructions.
+NAVIGATION_AVOIDANCE_INSTRUCTIONS = (
+    "HIGHEST PRIORITY: proactively steer around moving obstacles BEFORE getting close. "
+    "If the direct approach would reduce hull clearance below 1 m, start a bypass toward a clear side of the obstacle now. "
+    "Keep a useful bypass course steady; do not turn back toward the waypoint before passing clear of the obstacle. "
+    "Aim for at least 1 m extra hull clearance. If already closer, actively increase clearance rather than creep forward or wait beside it. "
+    "Choose a short safe detour that also advances toward the CURRENT waypoint when possible; a temporary increase in waypoint distance is allowed for safety. "
+    "Once clear, resume the current waypoint. These avoidance requirements override direct-course preferences below. "
+    "Obstacles keep moving when you stop; forecasts freeze their current positions even when movement speed and course are supplied. "
+)
+
+
 def _candidate_facts(
     observation,
     geometry,
@@ -112,6 +128,7 @@ def _candidate_facts(
     distance,
     limit,
     previous,
+    obstacles=(),
 ):
     task = observation["task"]
     boat = observation["boat"]
@@ -177,6 +194,9 @@ def _candidate_facts(
             },
         },
     }
+    if obstacles:
+        candidate["approximate_effect"]["obstacle_description"] = describe_clearance(
+            motion, future, obstacles, boat.get("collision_radius_m", 0.5))
     if previous is not None:
         previous_facts = geometry.motion_facts(motion, previous)
         previous_peak = previous_facts["max_speed_in_circle_mps"]
@@ -196,6 +216,7 @@ def _candidate_facts(
 def _describe_candidate(command, effect, duration, distance, limit, previous_limit):
     preview = effect["same_command_preview"]
     text = ""
+    text += effect.get("obstacle_description", "")
     if effect["passing_speed_above_ceiling"] or effect.get("previous_circle_speed_above_ceiling", False):
         text += "SPEED VIOLATION predicted during this action. Avoid; if unavoidable, brake to minimize excess. "
     text += (
@@ -241,6 +262,13 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
         )
     if command["speed_mps"] == 0:
         text += "This is BRAKING TO STOP, not instant stopping; its course value is ignored by the simulator. "
+    if "obstacle_description" in effect:
+        return text + (
+            "Choose this movement to start or continue an EARLY bypass on a clear side of the obstacle, maintaining at least 1 m extra hull clearance when feasible. "
+            "If already too close, actively increase end clearance. Continue the bypass until clear instead of turning back toward the waypoint too soon. "
+            "Among safe bypasses, make progress toward the current waypoint and keep the detour short; temporary loss of progress is allowed for safety. "
+            "Respect active circle speed ceilings among safe movements."
+        )
     text += (
         "Choose when this movement respects active circle ceilings, leaves room to brake before entry, "
         "and makes direct progress with little lateral overshoot or corrective turning. "
@@ -250,6 +278,7 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
     return text
 
 
+@model_speed_units
 def build_stop_payload(observation, model="jev-latest"):
     """立即停车任务；复用原 64 个 Choice 和解码，不依赖航路点。"""
     boat = observation["boat"]
@@ -258,6 +287,7 @@ def build_stop_payload(observation, model="jev-latest"):
     speed = abs(boat["targetSpeed"]) * KNOT_MPS
     course = boat["targetCourse"]
     criteria = {}
+    obstacles = nearby_obstacles(observation)
     for name, (i, j) in ACTION_CHOICES.items():
         target_speed = observation["action_space"]["speeds_knots"][i] * KNOT_MPS
         target_course = observation["action_space"]["courses_deg"][j]
@@ -274,7 +304,12 @@ def build_stop_payload(observation, model="jev-latest"):
             + ("Zero target speed brakes over time; the simulator keeps the received bow direction. "
                if target_speed == 0 else "")
         )
-    return {
+        if obstacles:
+            future = predict_ground_motion(speed, course, target_speed, target_course,
+                execution["speed_transition_time_s"], execution["course_transition_time_s"], duration * 2)
+            criteria[name] = describe_clearance(motion, future, obstacles,
+                boat.get("collision_radius_m", 0.5)) + criteria[name]
+    payload = {
         "model": model,
         "state": {
             "task": {
@@ -310,12 +345,18 @@ def build_stop_payload(observation, model="jev-latest"):
             }
         },
     }
+    if obstacles:
+        add_obstacle_state(payload["state"], observation, obstacles)
+        payload["questions"]["action"]["instructions"] = AVOIDANCE_INSTRUCTIONS + payload["questions"]["action"]["instructions"]
+    return payload
 
 
+@model_speed_units
 def build_payload(observation, model="jev-latest"):
     if observation["task"].get("mode") == "immediate_stop":
         return build_stop_payload(observation, model)
     geometry = WaypointGeometry(observation)
+    obstacles = nearby_obstacles(observation)
     task, boat = observation["task"], observation["boat"]
     execution = observation["execution"]
     duration = observation["planning"]["action_duration_s"]
@@ -373,6 +414,11 @@ def build_payload(observation, model="jev-latest"):
             "forecast": "Approximate ground-velocity forecast; assumes zero initial course rotation and a fresh response. Unknown startup direction uses candidate direction. Not a guarantee.",
         },
     }
+    if obstacles:
+        add_obstacle_state(state, observation, obstacles)
+        state["task"]["background"] = BACKGROUND.replace(
+            "No obstacles, wind or sideways drift are simulated.",
+            "Moving circular obstacles are simulated; wind and sideways drift are not.")
     # A passed circle remains subject to its ceiling until the boat exits it.
     previous = task["next_waypoint_index"] - 1
     if (
@@ -401,6 +447,7 @@ def build_payload(observation, model="jev-latest"):
             distance,
             limit,
             active_previous,
+            obstacles,
         )
         criteria[name] = _describe_candidate(
             candidate["command"],
@@ -416,7 +463,7 @@ def build_payload(observation, model="jev-latest"):
         "questions": {
             "action": {
                 "type": "choice",
-                "instructions": INSTRUCTIONS,
+                "instructions": (NAVIGATION_AVOIDANCE_INSTRUCTIONS if obstacles else "") + INSTRUCTIONS,
                 "criteria": criteria,
             }
         },

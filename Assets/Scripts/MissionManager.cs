@@ -13,6 +13,8 @@ public sealed class MissionManager : MonoBehaviour
     public MissionProgress Progress { get; private set; }
     public int Revision { get; private set; }
     public string LoadError { get; private set; }
+    public bool Failed { get; private set; }
+    public string FailureReason { get; private set; }
     public event Action RouteChanged;
     private BoatDynamics2D boat;
 
@@ -71,7 +73,8 @@ public sealed class MissionManager : MonoBehaviour
         catch (Exception error) { LoadError = error.Message; return false; }
     }
 
-    private void ResetProgress() { Progress?.Reset(boat.Position, boat.Speed); }
+    private void ResetProgress() { Failed = false; FailureReason = null; Progress?.Reset(boat.Position, boat.Speed); }
+    public void FailCollision(string obstacleId) { Failed = true; FailureReason = "Collision with " + obstacleId + ". Reset required."; }
     public void Evaluate(Vector2 previous, float previousSpeed) { Progress?.Evaluate(previous, boat.Position, boat.Speed, previousSpeed); }
-    public string Status => Progress == null ? "NoTask" : Progress.Completed ? "Completed" : "Running";
+    public string Status => Progress == null ? "NoTask" : Failed ? "Failed" : Progress.Completed ? "Completed" : "Running";
 }

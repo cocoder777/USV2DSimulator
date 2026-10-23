@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 // Observe completed physical steps; never controls the boat or changes the mission judge.
@@ -25,6 +26,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
         public double simulation_time;
         public float x, y, speed;
         public string mode;
+        public JArray obstacles { get; set; }
     }
 
     private sealed class PlotJob
@@ -76,7 +78,8 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
     private void AddSample()
     {
         samples.Add(new Sample { tick = boat.Tick, simulation_time = boat.SimulationTime,
-            x = boat.Position.x, y = boat.Position.y, speed = boat.Speed, mode = boat.Mode.ToString() });
+            x = boat.Position.x, y = boat.Position.y, speed = boat.Speed, mode = boat.Mode.ToString(),
+            obstacles = boat.GetComponent<DynamicObstacleField>()?.Snapshot() });
     }
 
     private void RecordStep()
@@ -84,7 +87,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
         if (recordedRoute != mission.Route || episode != boat.EpisodeId) BeginEpisode();
         if (recordedRoute == null || exported) return;
         AddSample();
-        if (mission.Progress.Completed) ExportCompletedRun();
+        if (mission.Failed || mission.Progress.Completed) ExportCompletedRun();
     }
 
     private void ExportCompletedRun()
@@ -101,7 +104,8 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
             Directory.CreateDirectory(directory);
             string name = "trajectory_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + "Z_" + episode;
             string data = Path.Combine(directory, name + ".json");
-            var document = new { schema_version = 1, result = "completed", episode_id = episode,
+            var document = new { schema_version = 1, result = mission.Failed ? "failed" : "completed",
+                failure_reason = mission.FailureReason, boat_radius_m = DynamicObstacleField.BoatRadius, episode_id = episode,
                 map_level = RecordedMapLevel(),
                 route = recordedRoute, samples, simulation_time = boat.SimulationTime,
                 final_speed_mps = boat.Speed, passed_count = mission.Progress.NextIndex,

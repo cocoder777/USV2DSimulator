@@ -19,11 +19,13 @@ public sealed class SimulationRunner : MonoBehaviour
     public string DecisionId { get; private set; }
     public event Action StepCompleted;
     public bool IsWaiting => State == RunState.Waiting || State == RunState.Failed;
-    public string Status => State + (LastError == null ? "" : ": " + LastError);
+    public string Status => State + (LastError == null ? "" : ": " + LastError)
+        + (bridge == null || bridge.AlgorithmStatus == 0 ? "" : " | Algorithm " + bridge.AlgorithmStatus + ": " + bridge.AlgorithmDescription);
     private BoatDynamics2D boat;
     private MissionManager mission;
     private BoatActionExecutor player;
     private BoatUdpBridge bridge;
+    private DynamicObstacleField obstacles;
     private string identity, parameters;
     private long requestTick;
     private float requestedDuration;
@@ -32,6 +34,7 @@ public sealed class SimulationRunner : MonoBehaviour
     {
         boat = GetComponent<BoatDynamics2D>(); mission = GetComponent<MissionManager>();
         player = GetComponent<BoatActionExecutor>(); bridge = GetComponent<BoatUdpBridge>();
+        obstacles = GetComponent<DynamicObstacleField>() ?? gameObject.AddComponent<DynamicObstacleField>();
         if (GetComponent<BoatTrajectoryRecorder>() == null) gameObject.AddComponent<BoatTrajectoryRecorder>();
     }
     void OnEnable()
@@ -53,12 +56,12 @@ public sealed class SimulationRunner : MonoBehaviour
     }
     public void StartJev()
     {
-        if (boat.Mode != BoatDynamics2D.ControlMode.Jev || mission.Progress == null || mission.Progress.Completed) return;
+        if (mission.Failed || boat.Mode != BoatDynamics2D.ControlMode.Jev || mission.Progress == null || mission.Progress.Completed) return;
         Invalidate(); StopRequested = false; JevStarted = true; Pump();
     }
     public void RequestImmediateStop()
     {
-        if (boat.Mode != BoatDynamics2D.ControlMode.Jev || !JevStarted || StopRequested
+        if (mission.Failed || boat.Mode != BoatDynamics2D.ControlMode.Jev || !JevStarted || StopRequested
             || mission.Progress == null || mission.Progress.Completed) return;
         Invalidate(); StopRequested = true; BeginDecision();
     }
@@ -75,6 +78,7 @@ public sealed class SimulationRunner : MonoBehaviour
     {
         player.Cancel(); bridge?.CancelDecisionRequest();
         DecisionId = null; identity = null; LastError = null; State = RunState.Initializing;
+        if (mission.Failed) { LastError = mission.FailureReason; State = RunState.Failed; }
     }
     private string Identity() => boat.SessionId + "/" + boat.EpisodeId + "/" + boat.RunId + "/" + mission.Revision;
     private string Parameters() => JsonUtility.ToJson(BoatParameters.Capture(boat)) + "/" + actionDuration.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
@@ -83,6 +87,7 @@ public sealed class SimulationRunner : MonoBehaviour
     public void Pump()
     {
         bridge?.PumpIncoming();
+        if (mission.Failed) { State = RunState.Failed; LastError = mission.FailureReason; return; }
         if (mission.Progress == null) { State = RunState.Initializing; return; }
         if (mission.Progress.Completed)
         { CompleteMission(); return; }
@@ -115,7 +120,7 @@ public sealed class SimulationRunner : MonoBehaviour
         ["run_id"] = boat.RunId, ["decision_id"] = DecisionId, ["tick"] = requestTick };
     public void ReceiveDecision(JObject packet)
     {
-        if (boat.Mode != BoatDynamics2D.ControlMode.Jev || DecisionId == null || identity != Identity()
+        if (mission.Failed || boat.Mode != BoatDynamics2D.ControlMode.Jev || DecisionId == null || identity != Identity()
             || (string)packet["session_id"] != boat.SessionId
             || (string)packet["episode_id"] != boat.EpisodeId || (string)packet["run_id"] != boat.RunId
             || (string)packet["decision_id"] != DecisionId || (long?)packet["tick"] != requestTick) return;
@@ -149,16 +154,21 @@ public sealed class SimulationRunner : MonoBehaviour
         // 同一任务轮次只通知一次；切换控制模式不会重复报告已经完成的任务。
         if (completedEpisodeId == boat.EpisodeId) return;
         completedEpisodeId = boat.EpisodeId;
+        NotifySimulation("mission_completed");
+    }
+    private void NotifySimulation(string type)
+    {
         bridge?.QueuePacket(new JObject {
-            ["type"] = "mission_completed",
-            ["session_id"] = boat.SessionId, ["episode_id"] = boat.EpisodeId,
-            ["run_id"] = boat.RunId, ["tick"] = boat.Tick
+            ["type"] = type, ["session_id"] = boat.SessionId, ["episode_id"] = boat.EpisodeId,
+            ["run_id"] = boat.RunId, ["tick"] = boat.Tick,
+            ["params"] = new JObject { ["platCode"] = 1001,
+                ["currentRoute"] = Math.Max(0, (mission.Progress?.NextIndex ?? 1) - 1) }
         });
     }
     public bool Advance(float dt)
     {
         Pump();
-        if (mission.Progress == null || mission.Progress.Completed || State == RunState.Failed) return false;
+        if (mission.Failed || mission.Progress == null || mission.Progress.Completed || State == RunState.Failed) return false;
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
         {
             try { if (!player.PrepareStep(dt)) return false; }
@@ -166,6 +176,13 @@ public sealed class SimulationRunner : MonoBehaviour
         }
         Vector2 previous = boat.Position; float previousSpeed = boat.Speed;
         boat.Step(dt);
+        string collision = obstacles.Step(dt, previous, boat.Position);
+        if (collision != null)
+        {
+            mission.FailCollision(collision);
+            NotifySimulation("simulation_collision"); Invalidate();
+            StepCompleted?.Invoke(); return true;
+        }
         if (!StopRequested) mission.Evaluate(previous, previousSpeed);
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
         { player.FinishStep(); if (!player.HasAction) State = RunState.Initializing; }
@@ -174,6 +191,7 @@ public sealed class SimulationRunner : MonoBehaviour
             player.Cancel(); bridge?.CancelDecisionRequest();
             DecisionId = null; identity = null; StopRequested = false;
             JevStarted = false; State = RunState.Stopped;
+            NotifySimulation("stop_completed");
         }
         if (mission.Progress.Completed) CompleteMission();
         StepCompleted?.Invoke();

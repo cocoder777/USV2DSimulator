@@ -1,4 +1,4 @@
-"""Render a completed Unity run as a standalone reference/actual trajectory PNG."""
+"""Render a completed or failed Unity run and obstacle traces as a standalone PNG."""
 import argparse
 import json
 from pathlib import Path
@@ -32,6 +32,19 @@ def plot_run(document, output):
             ax.plot(p["x"], p["y"], ".", color="0.5", markersize=3, zorder=2)
         ax.plot(actual[0]["x"], actual[0]["y"], "o", color="#0072BD", markersize=4, zorder=5)
         ax.plot(actual[-1]["x"], actual[-1]["y"], "s", color="#0072BD", markersize=4, zorder=5)
+        obstacles = {}
+        for sample in actual:
+            for obstacle in sample.get("obstacles") or []:
+                obstacles.setdefault(obstacle["id"], []).append(obstacle)
+        for index, trail in enumerate(obstacles.values()):
+            ax.plot([p["x"] for p in trail], [p["y"] for p in trail], color="red",
+                    alpha=0.4, linewidth=0.8)
+            last = trail[-1]
+            ax.add_patch(Circle((last["x"], last["y"]), last["radius_m"], fill=False,
+                                edgecolor="red", linewidth=1.2,
+                                label="Moving obstacles (final positions)" if index == 0 else None))
+        if document["result"] == "failed":
+            ax.plot(actual[-1]["x"], actual[-1]["y"], "x", color="red", markersize=9, zorder=6)
         ax.set_aspect("equal", adjustable="datalim")
         ax.margins(x=0.06, y=0.25)
         ax.set_xlabel("World X (m)")

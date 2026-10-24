@@ -11,7 +11,7 @@ from tools.client_protocol import (TASK, CONTROL, STATUS, STOP, SITUATION, Reass
 from decision_worker import DecisionScheduler, IDENTITY_FIELDS
 from tools.waypoint_geometry import WaypointGeometry
 
-API_KEY = "apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141"
+API_KEY = "apikey_26639a7022497874a548d3a318ee22c06e7_61d7bc21b12e449581f1a9f4401e581a37cfde43e6f688f1ad383ff8ff815631"
 
 
 def dumps(value):
@@ -112,7 +112,7 @@ def valid_request(packet):
             return False
         if (
             type(task["next_waypoint_index"]) is not int
-            or not 1 <= task["next_waypoint_index"] < task["planWaypointNum"]
+            or not 0 <= task["next_waypoint_index"] < task["planWaypointNum"]
         ):
             return False
         if (
@@ -192,9 +192,14 @@ def serve(settings):
     last_control_stamp = 0
 
     def send_status(sock, task, status, description, result=None, control_stamp=None):
-        params = {"currentRoute": task.get("params", {}).get("currentRoute", task.get("unity_only", {}).get("currentRoute", 0))}
+        key = task["simId"], task["id"]
+        context = task.get("params", adapter.tasks.get(key, {}))
+        params = {"currentRoute": context.get("currentRoute", 0) if isinstance(context, dict) else 0}
+        local = task.get("unity_only", {})
+        if local.get("decision_id"):
+            params["unity_only"] = {k: local[k] for k in ("decision_id", "tick")}
         if result is not None:
-            params["unity_only"] = {"result": result}
+            params["unity_only"] = {k: result[k] for k in ("decision_id", "tick")}
             if control_stamp is not None:
                 params["unity_only"]["control_timestamp"] = control_stamp
         content = {k: task[k] for k in ("simId", "id", "code")}
@@ -234,7 +239,7 @@ def serve(settings):
                             stamp = last_control_stamp + 1
                         last_control_stamp = stamp
                         try:
-                            platform = task.get("params", {}).get("platCode", task["unity_only"].get("platCode"))
+                            platform = task["params"]["platCode"]
                             data = control_packet(platform, **result["action"], stamp=stamp)
                         except (ValueError, OverflowError) as error:
                             failed = dict(result, type="decision_error", error=str(error))
@@ -244,6 +249,7 @@ def serve(settings):
                         send_status(sock, task, 1, "tracking" if record["request"]["type"] == "decision_request" else "stopping", result, stamp)
                 readable, _, _ = select.select([sock, multicast], [], [], .01)
                 for channel in readable:
+                    task = None
                     try:
                         data, source = channel.recvfrom(65507)
                         # Local validation profile: only the configured Unity sender supplies snapshots.
@@ -263,18 +269,28 @@ def serve(settings):
                         key = task["simId"], task["id"]
                         if event in ("mission_completed", "stop_completed", "simulation_collision", "simulation_cancelled"):
                             active.pop(key, None)
-                            adapter.waiting.pop(key, None)
                             if event in ("mission_completed", "stop_completed"):
                                 send_status(sock, task, 2, "completed" if event == "mission_completed" else "stopped")
+                            adapter.finish(key)
                             if log:
                                 log.write(dumps({"event": event, "notification": task}) + "\n"); log.flush()
                             if settings.exit_on_complete and event == "mission_completed":
                                 return
                             continue
-                        adapter.add_task(task, kind)
+                        if not adapter.add_task(task, kind):
+                            continue
+                        # Single-boat paused profile: admission revokes every older task's output.
+                        active.clear()
                         active[key] = local["decision_id"]
                     except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:
                         print(dumps({"event": "invalid_packet", "error": str(error)}), flush=True)
+                        if isinstance(task, dict):
+                            local = task.get("unity_only", {})
+                            if (all(isinstance(task.get(k), str) and task[k] for k in ("simId", "id", "code"))
+                                    and isinstance(local, dict) and isinstance(local.get("decision_id"), str)
+                                    and type(local.get("tick")) is int):
+                                failed = dict(adapter.identity(task), type="decision_error", error=str(error))
+                                send_status(sock, task, 3, str(error), failed)
                 try:
                     ready = adapter.ready()
                 except (ValueError, KeyError, TypeError, OverflowError) as error:
@@ -287,7 +303,7 @@ def serve(settings):
                     if error is None and not valid_request(packet):
                         error = "Invalid decision observation"
                     if error:
-                        result = {k: local[k] for k in IDENTITY_FIELDS}
+                        result = adapter.identity(task)
                         result.update(type="decision_error", error=error)
                         send_status(sock, task, 3, error, result)
                     else:

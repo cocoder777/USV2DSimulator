@@ -121,7 +121,6 @@ public sealed class SimulationRunner : MonoBehaviour
     public void ReceiveDecision(JObject packet)
     {
         if (mission.Failed || boat.Mode != BoatDynamics2D.ControlMode.Jev || DecisionId == null || identity != Identity()
-            || (string)packet["session_id"] != boat.SessionId
             || (string)packet["episode_id"] != boat.EpisodeId || (string)packet["run_id"] != boat.RunId
             || (string)packet["decision_id"] != DecisionId || (long?)packet["tick"] != requestTick) return;
         if (State != RunState.Waiting) return;
@@ -136,10 +135,7 @@ public sealed class SimulationRunner : MonoBehaviour
             foreach (string field in new[] { "speed", "course" })
                 if (action[field]?.Type != JTokenType.Float && action[field]?.Type != JTokenType.Integer)
                     throw new FormatException("Missing numeric action field: " + field);
-            if (packet["action_duration_s"]?.Type != JTokenType.Float && packet["action_duration_s"]?.Type != JTokenType.Integer)
-                throw new FormatException("Missing action duration.");
-            if (Math.Abs((double)packet["action_duration_s"] - requestedDuration) > 1e-6)
-                throw new FormatException("Response changed action duration.");
+            // The matching request owns its duration; the response carries only the command.
             player.AcceptAction(action.ToObject<DiscreteBoatAction>(), requestedDuration, Time.fixedDeltaTime);
             bridge.CancelDecisionRequest(); State = RunState.Executing;
         }

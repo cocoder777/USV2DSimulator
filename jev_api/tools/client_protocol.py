@@ -129,43 +129,100 @@ class UnitySnapshotAdapter:
         self.speed_unit = speed_unit
         self.situations = {}
         self.waiting = {}
+        self.tasks = {}
+        self.retired = set()
+        self.current = None
+        self.seen = set()
+        self.last_tick = -1
 
     def add_situation(self, record):
         key = record["timestamp"], record["platformId"]
-        self.situations[key] = record
+        previous = self.situations.get(key)
+        if previous is not None and previous[0] != record:
+            raise ValueError("Conflicting entity in the same snapshot")
+        now = time.monotonic()
+        self.situations = {k: v for k, v in self.situations.items() if now - v[1] <= 3}
+        self.situations[key] = (record, now)
         while len(self.situations) > 512:
             self.situations.pop(next(iter(self.situations)))
 
     def add_task(self, task, kind):
         local = task["unity_only"]
-        for field in ("session_id", "episode_id", "run_id", "decision_id"):
-            if not isinstance(local.get(field), str) or not local[field]:
-                raise ValueError("Missing Unity identity")
+        if not isinstance(local.get("decision_id"), str) or not local["decision_id"]:
+            raise ValueError("Missing decision identity")
         if type(local.get("tick")) is not int or local["tick"] < 0:
             raise ValueError("Invalid sampling tick")
         if not all(isinstance(task.get(k), str) and task[k] for k in ("simId", "id", "code")):
             raise ValueError("Missing task identity")
         if task["code"] != "trackingMode":
             raise ValueError("Expected trackingMode")
-        expected = local["situation_platform_ids"]
-        if not isinstance(expected, list) or not expected or len(set(expected)) != len(expected):
-            raise ValueError("Invalid situation manifest")
-        if any(type(pid) is not int or not 0 <= pid <= 65535 for pid in expected):
-            raise ValueError("Invalid platform ID")
-        own = task.get("params", {}).get("platCode", local.get("platCode"))
-        if own not in expected:
-            raise ValueError("Manifest has no own boat")
         key = (task["simId"], task["id"])
+        if key in self.retired:
+            raise ValueError("Retired Unity task")
+        if self.current == key:
+            if local["decision_id"] in self.seen:
+                return False
+            if local["tick"] < self.last_tick:
+                raise ValueError("Older sampling tick")
+        if kind == STOP:
+            if key not in self.tasks:
+                raise ValueError("Stop has no active task context")
+            task = dict(task, params=self.tasks[key])
+        params = task["params"]
+        if (type(params.get("platCode")) is not int or not 0 <= params["platCode"] <= 65535
+                or type(params.get("planWaypointNum")) is not int
+                or not isinstance(params.get("planWaypointList"), list)
+                or not params["planWaypointList"]
+                or params["planWaypointNum"] != len(params["planWaypointList"])
+                or type(params.get("currentRoute")) is not int
+                or not 0 <= params["currentRoute"] < params["planWaypointNum"]):
+            raise ValueError("Invalid trackingMode task or completed waypoint count")
+        # This radius table is also the exact entity manifest for this sample.
+        radii = local["collision_radii_m"]
+        if not isinstance(radii, dict) or not radii:
+            raise ValueError("Missing snapshot entities/radii")
+        expected = [int(pid) for pid in radii]
+        if (any(str(int(pid)) != pid for pid in radii)
+                or any(not 0 <= pid <= 65535 for pid in expected)
+                or any(type(r) not in (int, float) or not math.isfinite(r) or r <= 0 for r in radii.values())
+                or params["platCode"] not in expected):
+            raise ValueError("Invalid snapshot entities/radii")
+        stamp = local["situation_timestamp"]
+        if type(stamp) is not int or not 0 <= stamp <= 0xFFFFFFFF:
+            raise ValueError("Invalid situation timestamp")
+        if self.current != key:
+            if self.current is not None:
+                self.retired.add(self.current)
+                self.tasks.pop(self.current, None)
+            self.waiting.clear()
+            self.current = key
+            self.seen.clear()
+        self.last_tick = local["tick"]
+        self.seen.add(local["decision_id"])
+        self.tasks[key] = params
         self.waiting[key] = (task, kind, time.monotonic())
-        while len(self.waiting) > 16:
-            self.waiting.pop(next(iter(self.waiting)))
+        return True
+
+    @staticmethod
+    def identity(task):
+        # Internal scheduler envelope only. No duplicate identities on the wire.
+        return dict(session_id=task["simId"], episode_id=task["simId"], run_id=task["id"],
+                    decision_id=task["unity_only"]["decision_id"], tick=task["unity_only"]["tick"])
+
+    def finish(self, key):
+        self.waiting.pop(key, None)
+        self.tasks.pop(key, None)
+        self.retired.add(key)
 
     def ready(self):
         result = []
         for key, (task, kind, created) in list(self.waiting.items()):
             local = task["unity_only"]
             stamp = local["situation_timestamp"]
-            records = [self.situations.get((stamp, pid)) for pid in local["situation_platform_ids"]]
+            entities = [int(pid) for pid in local["collision_radii_m"]]
+            now = time.monotonic()
+            records = [self.situations.get((stamp, pid)) for pid in entities]
+            records = [item[0] if item is not None and now - item[1] <= 3 else None for item in records]
             if all(r is not None for r in records):
                 try:
                     packet = self.observation(dict(task, situation=records), kind)
@@ -173,6 +230,8 @@ class UnitySnapshotAdapter:
                 except (ValueError, KeyError, TypeError, OverflowError) as error:
                     result.append((task, None, str(error)))
                 del self.waiting[key]
+                for pid in entities:
+                    self.situations.pop((stamp, pid), None)
             elif time.monotonic() - created > 3:
                 result.append((task, None, "Incomplete Unity situation snapshot; use Retry Jev"))
                 del self.waiting[key]
@@ -182,7 +241,7 @@ class UnitySnapshotAdapter:
         from tools.waypoint_geometry import KNOT_MPS
         import copy
         local = task["unity_only"]
-        params = task.get("params", {"platCode": local.get("platCode"), "planWaypointList": []})
+        params = task["params"]
         boat = next(r for r in task["situation"] if r["platformId"] == params["platCode"])
         if boat["targetSpeed"] is None:
             raise ValueError("Unknown own speed")
@@ -192,10 +251,16 @@ class UnitySnapshotAdapter:
         points = copy.deepcopy(params["planWaypointList"])
         for point in points:
             point["routeSpeed"] *= KNOT_MPS
-        obs = dict(boat=boat, obstacles=[], planning=local["planning"], execution=local["execution"],
-                   action_space=local["action_space"], model_speed_unit=self.speed_unit,
+        maximum = local["max_speed_knots"]
+        if type(maximum) not in (int, float) or not math.isfinite(maximum) or maximum <= 0:
+            raise ValueError("Invalid candidate speed limit")
+        obs = dict(boat=boat, obstacles=[],
+                   planning=dict(action_duration_s=local["action_duration_s"], simulation_paused_while_deciding=True),
+                   execution=local["execution"],
+                   action_space=dict(speeds_knots=[maximum * f for f in (0, .05, .1, .2, .35, .5, .75, 1)],
+                                     courses_deg=list(range(0, 360, 45))), model_speed_unit=self.speed_unit,
                    task=dict(params, planWaypointList=points, routeSpeed_unit="m/s",
-                             next_waypoint_index=local["next_waypoint_index"],
+                             next_waypoint_index=params["currentRoute"],
                              arrival_radius_m=local["arrival_radius_m"],
                              stop_speed_mps=local["stop_speed_knots"] * KNOT_MPS))
         if kind == STOP:
@@ -204,5 +269,5 @@ class UnitySnapshotAdapter:
             if record["platformId"] != params["platCode"]:
                 obs["obstacles"].append(dict(record, id=str(record["platformId"]),
                     radius_m=local["collision_radii_m"][str(record["platformId"])]))
-        envelope = {k: local[k] for k in ("session_id", "episode_id", "run_id", "decision_id", "tick")}
+        envelope = self.identity(task)
         return dict(envelope, type="stop_request" if kind == STOP else "decision_request", observation=obs)

@@ -39,8 +39,8 @@ class WaypointGeometry:
             xy((p["routeLon"], p["routeLat"]), origin) for p in task["planWaypointList"]
         ]
         self.next_index = task["next_waypoint_index"]
-        if not 1 <= self.next_index < len(self.waypoints):
-            raise ValueError("Expected an active waypoint after the start")
+        if not 0 <= self.next_index < len(self.waypoints):
+            raise ValueError("Expected an active target waypoint")
         self.radius = task["arrival_radius_m"]
         self.target = self.waypoints[self.next_index]
         self.upcoming = [

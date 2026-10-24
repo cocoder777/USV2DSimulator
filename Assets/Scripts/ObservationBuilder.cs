@@ -23,14 +23,14 @@ public static class ObservationBuilder
         var route = mission.Route;
         var position = LonLat(boat.Position.x, boat.Position.y);
         var waypoints = new JArray();
-        foreach (var p in route.waypoints)
+        // The map's first point is an initial-position marker, not a protocol target.
+        for (int i = 1; i < route.waypoints.Length; i++)
         {
+            var p = route.waypoints[i];
             var coordinates = LonLat(p.x, p.y);
             waypoints.Add(new JObject { ["routeLon"] = coordinates[0].DeepClone(),
                 ["routeLat"] = coordinates[1].DeepClone(), ["routeSpeed"] = p.routeSpeed });
         }
-        var speeds = new JArray();
-        for (int i = 0; i < 8; i++) speeds.Add(DiscreteAction.Speed(i, boat) / DiscreteAction.MetresPerSecondPerKnot);
         // Velocity direction is not bow direction. At rest no course is available.
         float course = UnityEngine.Mathf.Repeat(90f - boat.HeadingDeg + (boat.Speed < 0 ? 180 : 0), 360);
         const int ownPlatform = 1001;
@@ -48,17 +48,14 @@ public static class ObservationBuilder
             ["params"] = new JObject {
                 ["platCode"] = ownPlatform, ["planRouteNum"] = mission.MapLevel,
                 ["currentRoute"] = Math.Max(0, mission.Progress.NextIndex - 1),
-                ["planWaypointNum"] = route.waypoints.Length, ["planWaypointList"] = waypoints },
+                ["planWaypointNum"] = waypoints.Count, ["planWaypointList"] = waypoints },
             ["situation"] = situation,
             ["unity_only"] = new JObject {
-                ["next_waypoint_index"] = mission.Progress.NextIndex,
                 ["arrival_radius_m"] = route.arrival_radius_m,
                 ["stop_speed_knots"] = route.stop_speed_mps / DiscreteAction.MetresPerSecondPerKnot,
                 ["collision_radii_m"] = radii,
-                ["planning"] = new JObject { ["action_duration_s"] = actionDuration,
-                    ["simulation_paused_while_deciding"] = true },
-                ["action_space"] = new JObject { ["speeds_knots"] = speeds,
-                    ["courses_deg"] = new JArray(DiscreteAction.CoursesDeg) },
+                ["action_duration_s"] = actionDuration,
+                ["max_speed_knots"] = boat.maxForwardSpeed / DiscreteAction.MetresPerSecondPerKnot,
                 ["execution"] = new JObject { ["speed_transition_time_s"] = boat.speedResponseTime,
                     ["course_transition_time_s"] = boat.headingResponseTime } }
         };

@@ -54,15 +54,15 @@ def observation(level=0):
         },
         "execution": {"speed_transition_time_s": 0.5, "course_transition_time_s": 0.5},
         "task": {
-            "planWaypointNum": len(route["waypoints"]),
-            "next_waypoint_index": 1,
+            "planWaypointNum": len(route["waypoints"]) - 1,
+            "next_waypoint_index": 0,
             "routeSpeed_unit": "m/s",
             "planWaypointList": [
                 dict(
                     zip(("routeLon", "routeLat"), geo(p["x"], p["y"])),
                     routeSpeed=p["routeSpeed"],
                 )
-                for p in route["waypoints"]
+                for p in route["waypoints"][1:]
             ],
             "arrival_radius_m": route["arrival_radius_m"],
             "stop_speed_mps": route["stop_speed_mps"],
@@ -191,8 +191,8 @@ class NavigationTests(unittest.TestCase):
 
     def test_passed_circle_ceiling_is_visible_in_each_candidate(self):
         obs = observation(4)
-        obs["task"]["next_waypoint_index"] = 2
-        previous = obs["task"]["planWaypointList"][1]
+        obs["task"]["next_waypoint_index"] = 1
+        previous = obs["task"]["planWaypointList"][0]
         lon, lat = previous["routeLon"], previous["routeLat"]
         obs["boat"].update(
             longitude=lon, latitude=lat, targetSpeed=1 / KNOT_MPS, targetCourse=90

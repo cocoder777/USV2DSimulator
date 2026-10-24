@@ -378,8 +378,8 @@ def build_payload(observation, model="jev-latest"):
                 if final
                 else "checkpoint"
             ),
-            "current_point_after_start": task["next_waypoint_index"],
-            "total_points_after_start": task["planWaypointNum"] - 1,
+            "current_point_after_start": task["next_waypoint_index"] + 1,
+            "total_points_after_start": task["planWaypointNum"],
             "final_stop_threshold_mps": task["stop_speed_mps"],
         },
         "boat": {
@@ -401,7 +401,7 @@ def build_payload(observation, model="jev-latest"):
         },
         "upcoming_waypoints": [
             {
-                "index": p["index"],
+                "index": p["index"] + 1,
                 "position": position_text(p["east_north_m"]),
                 "passing_speed_ceiling_mps": p["speed_limit_mps"],
             }
@@ -422,7 +422,7 @@ def build_payload(observation, model="jev-latest"):
     # A passed circle remains subject to its ceiling until the boat exits it.
     previous = task["next_waypoint_index"] - 1
     if (
-        previous > 0
+        previous >= 0
         and math.hypot(*geometry.waypoints[previous]) <= task["arrival_radius_m"]
     ):
         state["recently_passed_circle"] = {

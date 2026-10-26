@@ -12,6 +12,12 @@ public class BoatHUD : MonoBehaviour
         if (boat == null || statusText == null)
             return;
 
+        float displayScale = Mathf.Clamp(Screen.width / 1280f, 0.4f, 1.5f);
+        statusText.fontSize = 14 * displayScale;
+        var rect = statusText.rectTransform;
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0, 1);
+        rect.anchoredPosition = new Vector2(15, -15) * displayScale;
+        rect.sizeDelta = new Vector2(340, 500) * displayScale;
         BoatUdpBridge bridge = boat.GetComponent<BoatUdpBridge>();
         string connection = bridge == null ? "Unavailable" : bridge.CommunicationStatus;
         var mission = boat.GetComponent<MissionManager>();
@@ -25,7 +31,7 @@ public class BoatHUD : MonoBehaviour
 
             $"Position X: {boat.Position.x:F2} m\n" +
             $"Position Y: {boat.Position.y:F2} m\n" +
-            $"Speed: {boat.Speed:F2} m/s\n" +
+            $"Speed: {boat.Speed / DiscreteAction.MetresPerSecondPerKnot:F2} knots ({boat.Speed:F2} m/s)\n" +
             $"Heading: {boat.HeadingDeg:F1} deg\n" +
             $"Yaw Rate: {boat.YawRateDeg:F1} deg/s\n" +
 

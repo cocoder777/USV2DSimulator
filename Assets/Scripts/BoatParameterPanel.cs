@@ -6,6 +6,8 @@ public class BoatParameterPanel : MonoBehaviour
     private BoatDynamics2D boat;
     private MissionManager mission;
     private Vector2 scrollPosition;
+    private float simulationSpeed = 1f;
+    private float previousTimeScale;
     private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
     private static readonly string[] decisionModes = { "Paused", "Continuous" };
     private static readonly string[] mapDescriptions = {
@@ -28,17 +30,30 @@ public class BoatParameterPanel : MonoBehaviour
         mission = GetComponent<MissionManager>();
     }
 
+    void OnEnable()
+    {
+        previousTimeScale = Time.timeScale;
+        Time.timeScale = simulationSpeed;
+    }
+
+    void OnDisable()
+    {
+        Time.timeScale = previousTimeScale;
+    }
+
     void OnGUI()
     {
-        if (boat == null)
-            return;
+        float guiScale = Mathf.Clamp(Screen.width / 1280f, 0.4f, 1.5f);
+        var previousMatrix = GUI.matrix;
+        GUI.matrix = Matrix4x4.Scale(new Vector3(guiScale, guiScale, 1));
+        if (boat == null) { GUI.matrix = previousMatrix; return; }
 
         // 面板固定在屏幕右上角
         panelRect = new Rect(
-            Mathf.Max(10f, Screen.width - 330f),
+            Mathf.Max(10f, (Screen.width / guiScale) - 330f),
             10f,
-            Mathf.Min(320f, Screen.width - 20f),
-            Mathf.Max(160f, Mathf.Min(570f, Screen.height - 70f))
+            Mathf.Min(320f, (Screen.width / guiScale) - 20f),
+            Mathf.Max(160f, Mathf.Min(570f, (Screen.height / guiScale) - 70f))
         );
 
         GUI.Box(panelRect, GUIContent.none);
@@ -53,6 +68,19 @@ public class BoatParameterPanel : MonoBehaviour
         InitializeStyles();
 
         scrollPosition = GUILayout.BeginScrollView(scrollPosition);
+
+        GUILayout.Label("SIMULATION SPEED", titleStyle);
+        float requestedSpeed = DrawSlider("Simulation speed", simulationSpeed, 1f, 10f, "x");
+        requestedSpeed = Mathf.Round(requestedSpeed * 10f) / 10f;
+        if (GUILayout.Button("Reset speed to 1x", GUILayout.Height(24))) requestedSpeed = 1f;
+        if (!Mathf.Approximately(requestedSpeed, simulationSpeed))
+        {
+            simulationSpeed = requestedSpeed;
+            // Run more fixed steps per real second without changing integration precision.
+            Time.timeScale = simulationSpeed;
+        }
+        GUILayout.Label("Speeds up the boat and obstacles. Waiting for Jev still pauses simulation.", hintStyle);
+        GUILayout.Space(8);
 
         if (mission != null)
         {
@@ -80,9 +108,10 @@ public class BoatParameterPanel : MonoBehaviour
             GUI.enabled = enabled;
             GUILayout.Label("Simulation pauses while waiting for Jev. Mode switching is not available yet.", hintStyle);
             GUI.enabled = enabled && !runner.JevStarted;
-            float duration = Mathf.Round(DrawSlider("Action duration", runner.actionDuration,
-                Time.fixedDeltaTime, 2f, "s") / Time.fixedDeltaTime) * Time.fixedDeltaTime;
-            if (!runner.JevStarted) runner.actionDuration = duration;
+            float requestedDuration = DrawSlider("Action duration", runner.actionDuration,
+                Time.fixedDeltaTime, 2f, "s");
+            if (!runner.JevStarted && !Mathf.Approximately(requestedDuration, runner.actionDuration))
+                runner.actionDuration = Mathf.Round(requestedDuration / Time.fixedDeltaTime) * Time.fixedDeltaTime;
             GUI.enabled = enabled;
             GUILayout.Label("Set duration before starting. Reset to change it.", hintStyle);
             if (boat.Mode == BoatDynamics2D.ControlMode.Jev && !runner.JevStarted
@@ -93,6 +122,8 @@ public class BoatParameterPanel : MonoBehaviour
             if (GUILayout.Button("Stop via Jev", GUILayout.Height(28))) runner.RequestImmediateStop();
             GUI.enabled = enabled;
             if (runner.StopRequested) GUILayout.Label("Jev stop requested: braking in place.", hintStyle);
+            var camera = Camera.main?.GetComponent<BoatCameraFollow>();
+            if (camera != null) camera.overview = GUILayout.Toggle(camera.overview, "Map overview (mouse wheel to zoom)");
             GUILayout.Space(8);
         }
         var trajectory = GetComponent<BoatTrajectoryRecorder>();
@@ -112,63 +143,26 @@ public class BoatParameterPanel : MonoBehaviour
         GUILayout.Label("Changes apply immediately.", hintStyle);
         GUILayout.Space(8);
 
-        boat.maxForwardSpeed = DrawSlider(
-            "Max forward speed",
-            boat.maxForwardSpeed, 0.5f, 10f, "m/s"
-        );
-
-        boat.maxReverseSpeed = DrawSlider(
-            "Max reverse speed",
-            boat.maxReverseSpeed, 0f, 3f, "m/s"
-        );
-
-        if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
+        boat.maxForwardSpeed = DrawSlider("Max forward speed",
+            boat.maxForwardSpeed / DiscreteAction.MetresPerSecondPerKnot, 1f, 100f, "knots")
+            * DiscreteAction.MetresPerSecondPerKnot;
+        boat.maxReverseSpeed = DrawSlider("Max reverse speed", boat.maxReverseSpeed, 0f, 3f, "m/s");
+        boat.maxAcceleration = DrawSlider("Max acceleration", boat.maxAcceleration, 0.1f, 5f, "m/s^2");
+        boat.maxDeceleration = DrawSlider("Max deceleration", boat.maxDeceleration, 0.1f, 5f, "m/s^2");
+        boat.maxAngularAccelerationDeg = DrawSlider("Max angular acceleration",
+            boat.maxAngularAccelerationDeg, 0.1f, 20f, "deg/s^2");
+        boat.maxYawRateDeg = DrawSlider("Max turning rate", boat.maxYawRateDeg, 0.1f, 30f, "deg/s");
+        boat.lengthMetres = DrawSlider("Hull length", boat.lengthMetres, 1f, 30f, "m");
+        boat.beamMetres = DrawSlider("Hull beam", boat.beamMetres, 0.5f, 10f, "m");
+        GUILayout.Label($"Circular hull radius: {boat.CollisionRadius:F2} m (collision)", hintStyle);
+        boat.waypointRadiusMultiplier = DrawSlider("Waypoint radius multiplier", boat.waypointRadiusMultiplier, 1f, 20f, "x");
+        GUILayout.Label($"Waypoint acceptance radius: {boat.WaypointRadius:F2} m", hintStyle);
+        GUILayout.Label("Speed and turn rates are acceleration-limited. Settings apply in Manual and Jev modes.", hintStyle);
+        var obstacles = GetComponent<DynamicObstacleField>();
+        if (obstacles != null)
         {
-            boat.speedResponseTime = DrawSlider("Speed transition time",
-                boat.speedResponseTime, 0f, 5f, "s");
-            boat.headingResponseTime = DrawSlider("Heading transition time", boat.headingResponseTime, 0f, 5f, "s");
-            if (GUILayout.Button("Instant heading (0 s)")) boat.headingResponseTime = 0;
-            if (GUILayout.Button("Instant speed (0 s)")) boat.speedResponseTime = 0;
-            GUILayout.Label("Speed ramps linearly. Heading turns smoothly and arrives with zero yaw. Each time is independent; 0 is instant.", hintStyle);
-        }
-        else
-        {
-            boat.maxAcceleration = DrawSlider(
-                "Max acceleration",
-                boat.maxAcceleration, 0.1f, 5f, "m/s^2"
-            );
-
-            boat.maxAngularAccelerationDeg = DrawSlider(
-                "Max angular acceleration",
-                boat.maxAngularAccelerationDeg, 5f, 180f, "deg/s^2"
-            );
-
-            boat.maxYawRateDeg = DrawSlider(
-                "Max turning rate",
-                boat.maxYawRateDeg, 5f, 120f, "deg/s"
-            );
-
-            boat.accelerationTimeConstant = DrawSlider(
-                "Linear acceleration response",
-                boat.accelerationTimeConstant, 0f, 5f, "s"
-            );
-
-            boat.angularAccelerationTimeConstant = DrawSlider(
-                "Angular acceleration response",
-                boat.angularAccelerationTimeConstant, 0f, 5f, "s"
-            );
-
-            GUILayout.Label("Response is a time constant: larger values respond more slowly; 0 applies commands immediately.", hintStyle);
-
-            boat.linearDamping = DrawSlider(
-                "Linear damping",
-                boat.linearDamping, 0f, 2f, "1/s"
-            );
-
-            boat.angularDamping = DrawSlider(
-                "Angular damping",
-                boat.angularDamping, 0f, 5f, "1/s"
-            );
+            obstacles.smallAvoidanceRadius = DrawSlider("Small target avoidance", obstacles.smallAvoidanceRadius, 10f, 100f, "m");
+            obstacles.largeAvoidanceRadius = DrawSlider("Large target avoidance", obstacles.largeAvoidanceRadius, 80f, 100f, "m");
         }
 
         GUILayout.Space(6);
@@ -191,6 +185,7 @@ public class BoatParameterPanel : MonoBehaviour
 
         GUILayout.EndScrollView();
         GUILayout.EndArea();
+        GUI.matrix = previousMatrix;
     }
 
     void InitializeStyles()
@@ -234,19 +229,8 @@ public class BoatParameterPanel : MonoBehaviour
 
     void RestoreDefaults()
     {
-        boat.maxAcceleration = 1.5f;
-        boat.maxForwardSpeed = 5f;
-        boat.maxReverseSpeed = 1f;
-
-        boat.maxAngularAccelerationDeg = 60f;
-        boat.maxYawRateDeg = 45f;
-
-        boat.accelerationTimeConstant = 0f;
-        boat.angularAccelerationTimeConstant = 0f;
-        boat.speedResponseTime = 0.5f;
-        boat.headingResponseTime = 0.5f;
-
-        boat.linearDamping = 0.2f;
-        boat.angularDamping = 1.2f;
+        BoatParameters.Restore(boat);
+        var field = GetComponent<DynamicObstacleField>();
+        if (field != null) field.RestoreDefaults();
     }
 }

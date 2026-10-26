@@ -61,6 +61,7 @@ public sealed class MissionManager : MonoBehaviour
                 || Mathf.Abs(initial.yaw_rate_deg) > boat.maxYawRateDeg)
                 throw new FormatException("Initial velocity exceeds the current boat limits.");
             // Parse/validate before committing; an invalid replacement leaves the active task intact.
+            next.arrival_radius_m = boat.WaypointRadius;
             Route = next;
             Progress = new MissionProgress(next);
             Revision++;
@@ -73,7 +74,8 @@ public sealed class MissionManager : MonoBehaviour
         catch (Exception error) { LoadError = error.Message; return false; }
     }
 
-    private void ResetProgress() { Failed = false; FailureReason = null; Progress?.Reset(boat.Position, boat.Speed); }
+    public void SynchronizeHull() { if (Route != null) Route.arrival_radius_m = boat.WaypointRadius; }
+    private void ResetProgress() { SynchronizeHull(); Failed = false; FailureReason = null; Progress?.Reset(boat.Position, boat.Speed); }
     public void FailCollision(string obstacleId) { Failed = true; FailureReason = "Collision with " + obstacleId + ". Reset required."; }
     public void Evaluate(Vector2 previous, float previousSpeed) { Progress?.Evaluate(previous, boat.Position, boat.Speed, previousSpeed); }
     public string Status => Progress == null ? "NoTask" : Failed ? "Failed" : Progress.Completed ? "Completed" : "Running";

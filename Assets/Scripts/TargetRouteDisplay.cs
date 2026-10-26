@@ -6,13 +6,14 @@ using UnityEngine;
 public sealed class TargetRouteDisplay : MonoBehaviour
 {
     public TMP_FontAsset fontAsset;
-    [Min(0.001f)] public float lineWidth = 0.06f;
+    [Min(0.001f)] public float lineWidth = 1f;
     public bool IsLoaded => generatedRoot != null && generatedRoot.activeSelf;
     public string LoadError { get; private set; }
     private GameObject generatedRoot;
     private readonly List<Material> ownedMaterials = new List<Material>();
     private MissionManager mission;
     private int displayedProgress = -1;
+    private float displayedRadius;
     private readonly List<LineRenderer> markers = new List<LineRenderer>();
     private readonly List<TextMeshPro> labels = new List<TextMeshPro>();
 
@@ -28,10 +29,15 @@ public sealed class TargetRouteDisplay : MonoBehaviour
     void LateUpdate()
     {
         if (mission?.Progress == null) return;
+        if (!Mathf.Approximately(displayedRadius, mission.Route.arrival_radius_m)) LoadRoute();
         for (int i = 0; i < labels.Count; i++)
         {
             var point = mission.Route.waypoints[i];
             float? peak = mission.Progress.PassingMaxSpeeds[i];
+            float visualScale = Camera.main == null ? 1 : Mathf.Max(1, Camera.main.orthographicSize / 160);
+            labels[i].fontSize = 16 * visualScale;
+            labels[i].rectTransform.sizeDelta = new Vector2(100, 40) * visualScale;
+            labels[i].transform.position = new Vector3(point.x, point.y + mission.Route.arrival_radius_m + 14 * visualScale, 0.01f);
             string text = point.id + "\n计划航速（通过上限）：" + point.routeSpeed.ToString("F2") + " m/s";
             if (point.role == "start") { labels[i].text = point.id; continue; }
             if (peak.HasValue) text += "\n实际通过最高航速：" + peak.Value.ToString("F2") + " m/s"
@@ -55,6 +61,7 @@ public sealed class TargetRouteDisplay : MonoBehaviour
         {
             if (mission == null) mission = FindAnyObjectByType<MissionManager>();
             var route = mission?.Route;
+            if (route != null) displayedRadius = route.arrival_radius_m;
             if (route == null) throw new InvalidOperationException("MissionManager has not loaded a task.");
             if (fontAsset == null) throw new InvalidOperationException("Assign the existing TMP font asset.");
             if (!BoatDynamics2D.IsFinite(lineWidth) || lineWidth <= 0)
@@ -89,14 +96,14 @@ public sealed class TargetRouteDisplay : MonoBehaviour
                     float angle = vertex * Mathf.PI * 2f / circle.Length;
                     circle[vertex] = pointPosition + new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0) * route.arrival_radius_m;
                 }
-                MakeLine("Waypoint_" + point.id, circle, true, 0.07f, 0, material);
+                MakeLine("Waypoint_" + point.id, circle, true, 0.45f, 0, material);
                 var marker = generatedRoot.transform.Find("Waypoint_" + point.id).GetComponent<LineRenderer>();
                 // Give each marker its own material so completed colors do not affect all checkpoints.
                 marker.sharedMaterial = CreateMaterial(shader, material.color);
                 markers.Add(marker);
                 var labelObject = new GameObject("Label_" + point.id);
                 labelObject.transform.SetParent(generatedRoot.transform, false);
-                labelObject.transform.position = pointPosition + new Vector3(0, route.arrival_radius_m + 0.8f, 0);
+                labelObject.transform.position = pointPosition + new Vector3(0, route.arrival_radius_m + 14f, 0);
                 var label = labelObject.AddComponent<TextMeshPro>();
                 label.font = fontAsset;
                 var cjk = Resources.Load<TMP_FontAsset>("WaypointChinese");
@@ -104,10 +111,10 @@ public sealed class TargetRouteDisplay : MonoBehaviour
                 label.fontSharedMaterial = label.font.material;
                 label.text = point.id;
                 label.richText = false;
-                label.fontSize = 2.8f;
+                label.fontSize = 16f;
                 label.color = Color.white;
                 label.alignment = TextAlignmentOptions.Center;
-                label.rectTransform.sizeDelta = new Vector2(9f, 3f);
+                label.rectTransform.sizeDelta = new Vector2(100f, 40f);
                 label.GetComponent<MeshRenderer>().sortingOrder = 1;
                 labels.Add(label);
             }

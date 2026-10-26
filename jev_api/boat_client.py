@@ -11,7 +11,7 @@ from tools.client_protocol import (TASK, CONTROL, STATUS, STOP, SITUATION, Reass
 from decision_worker import DecisionScheduler, IDENTITY_FIELDS
 from tools.waypoint_geometry import WaypointGeometry
 
-API_KEY = "apikey_26639a7022497874a548d3a318ee22c06e7_61d7bc21b12e449581f1a9f4401e581a37cfde43e6f688f1ad383ff8ff815631"
+API_KEY = "apikey_22485fa78919f3a446da960b347c7a0275b4_0f3093e5fd9ea561ec8e253d3cfb2258c39060afba61a9fc49db198f8e9a5bf7"
 
 
 def dumps(value):
@@ -57,7 +57,7 @@ def valid_request(packet):
             return False
         if not -180 <= boat["longitude"] <= 180 or not -90 <= boat["latitude"] <= 90:
             return False
-        hull = boat.get("collision_radius_m", 0.5)
+        hull = boat.get("collision_radius_m")
         if not finite(hull) or hull <= 0:
             return False
         obstacles = obs.get("obstacles", [])
@@ -78,17 +78,30 @@ def valid_request(packet):
                 return False
             if (not all(finite(obstacle[k]) for k in ("longitude", "latitude", "radius_m"))
                 or not -180 <= obstacle["longitude"] <= 180
-                or not -90 <= obstacle["latitude"] <= 90 or obstacle["radius_m"] <= 0):
+                or not -90 <= obstacle["latitude"] <= 90 or obstacle["radius_m"] <= 0
+                or not finite(obstacle["avoidance_radius_m"])
+                or obstacle["avoidance_radius_m"] < obstacle["radius_m"]):
                 return False
         course = boat["targetCourse"]
         if course is not None and (not finite(course) or not 0 <= course < 360):
             return False
         if course is None and abs(boat["targetSpeed"]) > 1e-5:
             return False
-        if not all(
-            finite(execution[k]) and execution[k] >= 0
-            for k in ("speed_transition_time_s", "course_transition_time_s")
-        ):
+        if execution.get("motion_model") != "bounded_acceleration":
+            return False
+        if not all(finite(execution[k]) and execution[k] > 0 for k in (
+            "max_acceleration_mps2", "max_deceleration_mps2", "max_yaw_rate_deg_s",
+            "max_angular_acceleration_deg_s2", "fixed_dt_s", "hull_length_m", "hull_beam_m")):
+            return False
+        if (not finite(execution["heading_course_deg"]) or not 0 <= execution["heading_course_deg"] < 360
+                or not finite(execution["yaw_rate_deg_s"])
+                or abs(execution["yaw_rate_deg_s"]) > execution["max_yaw_rate_deg_s"] + 1e-4):
+            return False
+        if (not finite(execution["active_target_course_deg"]) or not 0 <= execution["active_target_course_deg"] < 360
+                or not finite(execution["active_course_error_deg"])):
+            return False
+        ratio = duration / execution["fixed_dt_s"]
+        if not 1 <= ratio <= 100000 or abs(ratio - round(ratio)) > 1e-3:
             return False
         speeds, courses = space["speeds_knots"], space["courses_deg"]
         if (

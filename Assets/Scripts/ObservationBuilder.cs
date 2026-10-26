@@ -16,7 +16,7 @@ public static class ObservationBuilder
         Math.Round(OriginLon + x / (EarthRadius * Math.Cos(OriginLat * Math.PI / 180)) * 180 / Math.PI, 8),
         Math.Round(OriginLat + y / EarthRadius * 180 / Math.PI, 8));
 
-    public static JObject ForModel(BoatDynamics2D boat, MissionManager mission, float actionDuration = 0.4f)
+    public static JObject ForModel(BoatDynamics2D boat, MissionManager mission, float actionDuration = BoatParameters.DefaultActionDuration)
     {
         if (mission?.Route == null || mission.Progress.Next == null)
             throw new InvalidOperationException("No active task.");
@@ -37,11 +37,11 @@ public static class ObservationBuilder
         var situation = new JArray { Record(ownPlatform, position,
             boat.Speed / DiscreteAction.MetresPerSecondPerKnot,
             Math.Abs(boat.Speed) < 0.000001f ? (double?)null : course, 2) };
-        var radii = new JObject { [ownPlatform.ToString()] = DynamicObstacleField.BoatRadius };
+        var radii = new JObject { [ownPlatform.ToString()] = boat.CollisionRadius };
         foreach (JObject obstacle in boat.GetComponent<DynamicObstacleField>()?.Observe() ?? new JArray())
         {
             situation.Add(obstacle.DeepClone());
-            radii[((int)obstacle["platformId"]).ToString()] = DynamicObstacleField.ObstacleRadius;
+            radii[((int)obstacle["platformId"]).ToString()] = boat.GetComponent<DynamicObstacleField>().CollisionRadius((int)obstacle["platformId"]);
         }
         foreach (JObject point in waypoints) point["routeSpeed"] = (double)point["routeSpeed"] / DiscreteAction.MetresPerSecondPerKnot;
         return new JObject {
@@ -56,8 +56,20 @@ public static class ObservationBuilder
                 ["collision_radii_m"] = radii,
                 ["action_duration_s"] = actionDuration,
                 ["max_speed_knots"] = boat.maxForwardSpeed / DiscreteAction.MetresPerSecondPerKnot,
-                ["execution"] = new JObject { ["speed_transition_time_s"] = boat.speedResponseTime,
-                    ["course_transition_time_s"] = boat.headingResponseTime } }
+                ["execution"] = new JObject {
+                    ["motion_model"] = "bounded_acceleration",
+                    ["speed_transition_time_s"] = 0, ["course_transition_time_s"] = 0,
+                    ["max_acceleration_mps2"] = boat.maxAcceleration,
+                    ["max_deceleration_mps2"] = boat.maxDeceleration,
+                    ["max_yaw_rate_deg_s"] = boat.maxYawRateDeg,
+                    ["max_angular_acceleration_deg_s2"] = boat.maxAngularAccelerationDeg,
+                    ["heading_course_deg"] = UnityEngine.Mathf.Repeat(90f - boat.HeadingDeg, 360),
+                    ["yaw_rate_deg_s"] = -boat.YawRateDeg,
+                    ["active_target_course_deg"] = boat.NavigationTargetCourseDeg,
+                    ["active_course_error_deg"] = boat.NavigationCourseErrorDeg,
+                    ["fixed_dt_s"] = UnityEngine.Time.fixedDeltaTime,
+                    ["hull_length_m"] = boat.lengthMetres, ["hull_beam_m"] = boat.beamMetres,
+                    ["obstacle_avoidance_radii_m"] = boat.GetComponent<DynamicObstacleField>()?.AvoidanceRadii() ?? new JObject() } }
         };
     }
 

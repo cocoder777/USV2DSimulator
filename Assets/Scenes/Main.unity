@@ -235,9 +235,9 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 297171258}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: -0.7071068, w: 0.7071068}
-  m_LocalPosition: {x: -0, y: -0.0107, z: 0}
-  m_LocalScale: {x: 4.0495734, y: 2, z: 1}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 64.44444, y: 10.625001, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1650423687}
@@ -463,7 +463,7 @@ Camera:
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
-  m_BackGroundColor: {r: 0.19215687, g: 0.3019608, b: 0.4745098, a: 0}
+  m_BackGroundColor: {r: 0.025, g: 0.09, b: 0.14, a: 1}
   m_projectionMatrixMode: 1
   m_GateFitMode: 2
   m_FOVAxisMode: 0
@@ -488,7 +488,7 @@ Camera:
   far clip plane: 1000
   field of view: 34
   orthographic: 1
-  orthographic size: 5
+  orthographic size: 160
   m_Depth: -1
   m_CullingMask:
     serializedVersion: 2
@@ -534,6 +534,8 @@ MonoBehaviour:
   target: {fileID: 1650423687}
   offset: {x: 0, y: 0, z: -10}
   smoothTime: 0.15
+  orthographicSize: 160
+  overview: 0
 --- !u!1 &619394800
 GameObject:
   m_ObjectHideFlags: 0
@@ -764,6 +766,8 @@ GameObject:
   - component: {fileID: 1650423696}
   - component: {fileID: 1650423695}
   - component: {fileID: 1650423694}
+  - component: {fileID: 1650423698}
+  - component: {fileID: 1650423697}
   m_Layer: 0
   m_Name: Boat
   m_TagString: Untagged
@@ -841,7 +845,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1.2, y: 0.45, z: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 297171259}
@@ -859,15 +863,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6850a32ef42e9b14b922cf8ad65442f4, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BoatDynamics2D
-  maxAcceleration: 1.5
-  maxForwardSpeed: 5
+  maxForwardSpeed: 25.722223
   maxReverseSpeed: 1
-  maxAngularAccelerationDeg: 60
-  maxYawRateDeg: 45
-  accelerationTimeConstant: 0
-  angularAccelerationTimeConstant: 0
-  linearDamping: 0.2
-  angularDamping: 1.2
+  maxAcceleration: 1.46
+  maxDeceleration: 1.75
+  maxAngularAccelerationDeg: 4
+  maxYawRateDeg: 12
+  lengthMetres: 11.6
+  beamMetres: 3.4
+  waypointRadiusMultiplier: 5
 --- !u!114 &1650423689
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -880,9 +884,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1c340cc8a29949b41bfcd49d42a7f65a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BoatTrail
-  pointSpacing: 0.1
-  maxPoints: 3000
-  lineWidth: 0.04
+  pointSpacing: 2
+  maxPoints: 12000
+  lineWidth: 0.7
 --- !u!120 &1650423690
 LineRenderer:
   serializedVersion: 3
@@ -1032,6 +1036,9 @@ MonoBehaviour:
   port: 5005
   targetAddress: 127.0.0.1
   targetPort: 5006
+  situationGroup: 239.255.0.10
+  situationPort: 18010
+  multicastInterface: 127.0.0.1
 --- !u!114 &1650423694
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1044,7 +1051,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 061d625f63114dcb9545cdc7e8269f66, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SimulationRunner
-  actionDuration: 0.4
+  actionDuration: 1
 --- !u!114 &1650423695
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1070,6 +1077,37 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MissionManager
   routeFile: 
+--- !u!114 &1650423697
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1650423685}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 459e9215fbd777d40ad4f9c3528342ea, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BoatHullVisual
+--- !u!114 &1650423698
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1650423685}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 14ffd6107fd82344480dde70f1aa283c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DynamicObstacleField
+  maximumObstacles: 3
+  smallCollisionRadius: 3
+  largeCollisionRadius: 12
+  smallAvoidanceRadius: 50
+  largeAvoidanceRadius: 90
+  patrolAmplitude: 20
+  patrolAngularFrequency: 0.04
 --- !u!1 &1679133312
 GameObject:
   m_ObjectHideFlags: 0
@@ -1137,7 +1175,7 @@ SpriteRenderer:
   m_SortingOrder: -100
   m_MaskInteraction: 0
   m_Sprite: {fileID: 21300000, guid: c2a38ef95e0579942a2ff6398389207a, type: 3}
-  m_Color: {r: 0.6901961, g: 0.8784314, b: 0.9019608, a: 1}
+  m_Color: {r: 0.65, g: 0.85, b: 0.9, a: 0.18}
   m_FlipX: 0
   m_FlipY: 0
   m_DrawMode: 2
@@ -1157,7 +1195,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_LocalScale: {x: 40, y: 40, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -1344,7 +1382,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TargetRouteDisplay
   fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
-  lineWidth: 0.06
+  lineWidth: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

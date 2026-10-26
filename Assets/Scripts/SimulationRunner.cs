@@ -13,7 +13,7 @@ public sealed class SimulationRunner : MonoBehaviour
     public bool CanChangeDecisionMode => false;
     public bool JevStarted { get; private set; }
     public bool StopRequested { get; private set; }
-    [Min(0.02f)] public float actionDuration = 0.4f;
+    [Min(0.02f)] public float actionDuration = BoatParameters.DefaultActionDuration;
     public RunState State { get; private set; } = RunState.Initializing;
     public string LastError { get; private set; }
     public string DecisionId { get; private set; }
@@ -35,6 +35,7 @@ public sealed class SimulationRunner : MonoBehaviour
         boat = GetComponent<BoatDynamics2D>(); mission = GetComponent<MissionManager>();
         player = GetComponent<BoatActionExecutor>(); bridge = GetComponent<BoatUdpBridge>();
         obstacles = GetComponent<DynamicObstacleField>() ?? gameObject.AddComponent<DynamicObstacleField>();
+        if (GetComponent<BoatHullVisual>() == null) gameObject.AddComponent<BoatHullVisual>();
         if (GetComponent<BoatTrajectoryRecorder>() == null) gameObject.AddComponent<BoatTrajectoryRecorder>();
     }
     void OnEnable()
@@ -81,11 +82,12 @@ public sealed class SimulationRunner : MonoBehaviour
         if (mission.Failed) { LastError = mission.FailureReason; State = RunState.Failed; }
     }
     private string Identity() => boat.SessionId + "/" + boat.EpisodeId + "/" + boat.RunId + "/" + mission.Revision;
-    private string Parameters() => JsonUtility.ToJson(BoatParameters.Capture(boat)) + "/" + actionDuration.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+    private string Parameters() => JsonUtility.ToJson(BoatParameters.Capture(boat)) + "/" + (obstacles == null ? "" : JsonUtility.ToJson(obstacles.Settings)) + "/" + actionDuration.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
     void Update() { Pump(); }
     void FixedUpdate() { Advance(Time.fixedDeltaTime); }
     public void Pump()
     {
+        mission.SynchronizeHull();
         bridge?.PumpIncoming();
         if (mission.Failed) { State = RunState.Failed; LastError = mission.FailureReason; return; }
         if (mission.Progress == null) { State = RunState.Initializing; return; }

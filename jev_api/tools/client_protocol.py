@@ -268,6 +268,7 @@ class UnitySnapshotAdapter:
         for record in task["situation"]:
             if record["platformId"] != params["platCode"]:
                 obs["obstacles"].append(dict(record, id=str(record["platformId"]),
-                    radius_m=local["collision_radii_m"][str(record["platformId"])]))
+                    radius_m=local["collision_radii_m"][str(record["platformId"])],
+                    avoidance_radius_m=local["execution"]["obstacle_avoidance_radii_m"][str(record["platformId"])]))
         envelope = self.identity(task)
         return dict(envelope, type="stop_request" if kind == STOP else "decision_request", observation=obs)

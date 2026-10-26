@@ -5,7 +5,7 @@ import json
 import math
 from pathlib import Path
 
-STEP_X_METERS = 0.1
+STEP_X_METERS = 2.0
 INTERPOLATION = "piecewise_quintic_smoothstep"
 
 
@@ -67,9 +67,19 @@ def main():
     route_file = Path(__file__).resolve().parent.parent / "Assets" / "StreamingAssets" / "fixed_route.json"
     try:
         current = json.loads(route_file.read_text(encoding="utf-8"))
-        route = build_curve(current)
+        profile = json.loads((Path(__file__).parent / "map_profile.json").read_text(encoding="utf-8"))
+        layout = [(0, 0), (10, 0), (20, 5), (30, 5), (40, 0)]
+        scale = profile["coordinate_scale"]
+        speed_limits = profile["waypoint_speed_knots"]
+        for i, (point, (x, y)) in enumerate(zip(current["waypoints"], layout)):
+            point.update(x=x * scale, y=y * scale,
+                routeSpeed=(0 if i == 0 else profile["final_speed_knots"] if i == len(layout) - 1
+                            else speed_limits[(i - 1) % len(speed_limits)]) * 1852 / 3600)
+        current["arrival_radius_m"] = math.hypot(11.6, 3.4) / 2 * profile["waypoint_radius_multiplier"]
+        current["stop_speed_mps"] = profile["stop_speed_mps"]
+        route = build_curve(current, step=profile["sampling_step_m"])
         if args.check:
-            if current != route:
+            if json.loads(route_file.read_text(encoding="utf-8")) != route:
                 parser.exit(1, "Bundled route is stale; regenerate it.\n")
         else:
             route_file.write_text(serialized(route), encoding="utf-8")

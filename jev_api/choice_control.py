@@ -3,21 +3,13 @@
 import math
 from tools.model_units import model_speed_units
 from tools.waypoint_geometry import WaypointGeometry, KNOT_MPS
-from tools.navigation_motion import predict_ground_motion
+from tools.navigation_motion import predict_ground_motion, braking_facts, preview_duration
 from tools.obstacle_geometry import (
     nearby_obstacles, describe_clearance, add_obstacle_state, AVOIDANCE_INSTRUCTIONS,
 )
 
-DIRECTIONS = (
-    "north",
-    "northeast",
-    "east",
-    "southeast",
-    "south",
-    "southwest",
-    "west",
-    "northwest",
-)
+DIRECTIONS = ("north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest")
+
 ACTION_CHOICES = {
     f"speed_{i}__{name}": (i, j) for i in range(8) for j, name in enumerate(DIRECTIONS)
 }
@@ -69,7 +61,7 @@ INSTRUCTIONS = (
     "to slow to the next waypoint's passing ceiling BEFORE entry, with margin. "
     "If excess is already unavoidable from current motion, brake strongly to reduce it rather than accelerate. "
     "Never accelerate hard near a circle merely because this single action stops short of entering it. "
-    "Use the longer same-command preview to anticipate the following action. "
+    "Use the longer same-command preview to see a complete turn and anticipate braking; it is hypothetical, not a commitment. "
     "On final approach use a slow controlled entry under its ceiling, then stop. "
     "Once braking for final entry, do not accelerate again merely to reach the center faster. "
     "A direct path never justifies a speed violation: if a candidate predicts EXCEEDS, prefer a safe braking action "
@@ -81,7 +73,7 @@ INSTRUCTIONS = (
     "Because forecasts are approximate, begin braking with spatial margin: do not rely on barely meeting the ceiling at the exact boundary. "
     "Use approach_margin_speed_above_ceiling as an early-braking warning, especially with residual high speed or a course change. "
     "The extra approach margin is a conservative cue only; the actual arrival radius and speed ceiling are unchanged. "
-    "Account for speed and course transition durations. A zero-speed command brakes over time, not instantly. "
+    "Account for bounded acceleration, braking, angular acceleration and yaw rate. A zero-speed command brakes over time, not instantly. "
     "Intermediate waypoints require no stop. Once a waypoint is passed, proceed to the next one; "
     "keep respecting the previous ceiling until you leave its circle. "
     "If recently_passed_circle exists, its exit ceiling is still ACTIVE even though the target switched. "
@@ -99,8 +91,9 @@ INSTRUCTIONS = (
     "Use adjacent courses that bracket the direct bearing when necessary, with timely small corrections rather than long "
     "off-bearing runs followed by large recovery turns. Hold a course only while its predicted motion remains useful. "
     "A course change after passing a waypoint is appropriate for the next leg; do not turn early toward a future point. "
-    "Inspect the predicted endpoint distance and entry facts, but these are APPROXIMATIONS from ground velocity: "
-    "bow direction, yaw rate and actuator progress are unavailable. In particular startup and sharp turns may differ. "
+    "Use braking.distance_to_ceiling_m and one_decision_travel_m to start braking well BEFORE entry; a short preview alone is insufficient at high speed. "
+    "Turning also needs time to accelerate and cancel yaw; the current heading and yaw are included in the forecast. "
+    "Predictions use quantized situation speed/position and obstacle snapshots, so leave margin. "
     "If the waypoint is behind the current movement, slow before turning back. "
     "When very close or already inside the final circle, prefer braking to zero over another accelerating move. "
     "All candidates remain available: no local controller selects, ranks or filters your choice."
@@ -110,9 +103,13 @@ INSTRUCTIONS = (
 # Navigation-specific wording: the immediate-stop request keeps its existing instructions.
 NAVIGATION_AVOIDANCE_INSTRUCTIONS = (
     "HIGHEST PRIORITY: proactively steer around moving obstacles BEFORE getting close. "
-    "If the direct approach would reduce hull clearance below 1 m, start a bypass toward a clear side of the obstacle now. "
+    "If the direct approach would enter its configured avoidance safety circle, start a bypass toward a clear side of the obstacle now. "
     "Keep a useful bypass course steady; do not turn back toward the waypoint before passing clear of the obstacle. "
-    "Aim for at least 1 m extra hull clearance. If already closer, actively increase clearance rather than creep forward or wait beside it. "
+    "Keep the own hull outside the configured safety circle. If already closer, actively increase clearance rather than creep forward or wait beside it. "
+    "A zero-speed command brakes but cannot turn or perform a bypass. When stopped outside the final parking circle, "
+    "resume with a nonzero safe bypass instead of repeatedly choosing zero speed. "
+    "Compare predicted physical and safety clearance, not just distance reduction: a low-speed turn may initially approach "
+    "the obstacle yet remain outside its safety circle and gain clearance in the long preview. "
     "Choose a short safe detour that also advances toward the CURRENT waypoint when possible; a temporary increase in waypoint distance is allowed for safety. "
     "Once clear, resume the current waypoint. These avoidance requirements override direct-course preferences below. "
     "Obstacles keep moving when you stop; forecasts freeze their current positions even when movement speed and course are supplied. "
@@ -133,7 +130,7 @@ def _candidate_facts(
     task = observation["task"]
     boat = observation["boat"]
     execution = observation["execution"]
-    speed = abs(boat["targetSpeed"]) * KNOT_MPS
+    speed = boat["targetSpeed"] * KNOT_MPS
     course = boat["targetCourse"]
     duration = observation["planning"]["action_duration_s"]
     motion = predict_ground_motion(
@@ -141,20 +138,17 @@ def _candidate_facts(
         course,
         target_speed,
         target_course,
-        execution["speed_transition_time_s"],
-        execution["course_transition_time_s"],
-        duration,
+        execution, duration,
     )
     facts = geometry.motion_facts(motion)
     margin_facts = geometry.motion_facts(motion, radius=task["arrival_radius_m"] * 1.25)
+    horizon = preview_duration(execution, duration, speed)
     future = predict_ground_motion(
         speed,
         course,
         target_speed,
         target_course,
-        execution["speed_transition_time_s"],
-        execution["course_transition_time_s"],
-        duration * 2,
+        execution, horizon, dt=max(0.1, execution["fixed_dt_s"]),
     )
     future_facts = geometry.motion_facts(future)
     candidate = {
@@ -167,6 +161,8 @@ def _candidate_facts(
             "midpoint": position_text(motion["midpoint"]),
             "endpoint": position_text(motion["endpoint"]),
             "end_speed_mps": round(motion["end_speed"], 6),
+            "end_course_deg": round(motion["end_course_deg"], 3),
+            "end_yaw_rate_deg_s": round(motion["end_yaw_rate_deg_s"], 3),
             "distance_reduction_m": round(
                 distance - facts["end_checkpoint_distance_m"], 3
             ),
@@ -183,7 +179,7 @@ def _candidate_facts(
             is not None
             and margin_facts["max_speed_in_circle_mps"] > limit + 1e-5,
             "same_command_preview": {
-                "duration_s": duration * 2,
+                "duration_s": horizon,
                 "end_checkpoint_distance_m": round(
                     future_facts["end_checkpoint_distance_m"], 3
                 ),
@@ -196,7 +192,7 @@ def _candidate_facts(
     }
     if obstacles:
         candidate["approximate_effect"]["obstacle_description"] = describe_clearance(
-            motion, future, obstacles, boat.get("collision_radius_m", 0.5))
+            motion, future, obstacles, boat["collision_radius_m"])
     if previous is not None:
         previous_facts = geometry.motion_facts(motion, previous)
         previous_peak = previous_facts["max_speed_in_circle_mps"]
@@ -222,6 +218,7 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
     text += (
         f"Set target ground speed {command['speed_mps']:.3f} m/s, absolute course {command['absolute_course_deg']:.0f} degrees ({command['direction']}). "
         f"Approximate motion over {duration:.3f} s: midpoint {effect['midpoint']}; endpoint {effect['endpoint']}; end speed {effect['end_speed_mps']:.3f} m/s. "
+        f"End course {effect['end_course_deg']:.3f} deg; yaw {effect['end_yaw_rate_deg_s']:.3f} deg/s. "
         f"Target distance {distance:.3f} -> {effect['end_checkpoint_distance_m']:.3f} m; distance reduction {effect['distance_reduction_m']:.3f} m. "
     )
     peak = effect["max_speed_in_circle_mps"]
@@ -230,52 +227,41 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
     else:
         text += (
             f"Inside current waypoint circle: estimated maximum speed {peak:.3f} m/s, permitted ceiling {limit:.3f} m/s; "
-            + (
-                "EXCEEDS the ceiling. "
-                if effect["passing_speed_above_ceiling"]
-                else "does not exceed the ceiling. "
-            )
+            + ("EXCEEDS the ceiling. " if effect["passing_speed_above_ceiling"] else "does not exceed the ceiling. ")
         )
     if effect["approach_margin_speed_above_ceiling"]:
         text += "Early braking warning: still above the ceiling in the extra approach margin. "
     text += (
         f"If held for {preview['duration_s']:.3f} s instead (hypothetical only): end distance {preview['end_checkpoint_distance_m']:.3f} m; "
-        + (
-            "would enter the circle and EXCEEDS its speed ceiling. "
-            if preview["passing_speed_above_ceiling"]
-            else (
-                "would enter the circle without exceeding its ceiling. "
-                if preview["enters_checkpoint"]
-                else "circle not entered yet. "
-            )
-        )
+        + ("would enter the circle and EXCEEDS its speed ceiling. " if preview["passing_speed_above_ceiling"]
+           else ("would enter the circle without exceeding its ceiling. " if preview["enters_checkpoint"] else "circle not entered yet. "))
     )
     if "previous_circle_max_speed_mps" in effect:
         previous_peak = effect["previous_circle_max_speed_mps"]
         text += (
             f"Before exiting the PREVIOUS circle: estimated maximum speed {previous_peak:.3f} m/s, permitted ceiling {previous_limit:.3f} m/s; "
-            + (
-                "EXCEEDS the previous ceiling. "
-                if effect["previous_circle_speed_above_ceiling"]
-                else "does not exceed the previous ceiling. "
-            )
+            + ("EXCEEDS the previous ceiling. " if effect["previous_circle_speed_above_ceiling"] else "does not exceed the previous ceiling. ")
         )
     if command["speed_mps"] == 0:
         text += "This is BRAKING TO STOP, not instant stopping; its course value is ignored by the simulator. "
+        if "obstacle_description" in effect:
+            return text + (
+                "Braking only: this action does not steer around the obstacle. "
+                "Use to reduce unsafe speed or for final parking; once stopped, choose a safe nonzero bypass to resume navigation."
+            )
     if "obstacle_description" in effect:
         return text + (
-            "Choose this movement to start or continue an EARLY bypass on a clear side of the obstacle, maintaining at least 1 m extra hull clearance when feasible. "
+            "Choose this movement to start or continue an EARLY bypass on a clear side of the obstacle, remaining outside the configured avoidance safety circle. "
             "If already too close, actively increase end clearance. Continue the bypass until clear instead of turning back toward the waypoint too soon. "
             "Among safe bypasses, make progress toward the current waypoint and keep the detour short; temporary loss of progress is allowed for safety. "
             "Respect active circle speed ceilings among safe movements."
         )
-    text += (
+    return text + (
         "Choose when this movement respects active circle ceilings, leaves room to brake before entry, "
         "and makes direct progress with little lateral overshoot or corrective turning. "
         "Transit above the next circle's ceiling is allowed outside active circles; "
         "this action need not reach the circle. Speed safety and final braking take priority over path and time."
     )
-    return text
 
 
 @model_speed_units
@@ -284,7 +270,7 @@ def build_stop_payload(observation, model="jev-latest"):
     boat = observation["boat"]
     duration = observation["planning"]["action_duration_s"]
     execution = observation["execution"]
-    speed = abs(boat["targetSpeed"]) * KNOT_MPS
+    speed = boat["targetSpeed"] * KNOT_MPS
     course = boat["targetCourse"]
     criteria = {}
     obstacles = nearby_obstacles(observation)
@@ -293,22 +279,21 @@ def build_stop_payload(observation, model="jev-latest"):
         target_course = observation["action_space"]["courses_deg"][j]
         motion = predict_ground_motion(
             speed, course, target_speed, target_course,
-            execution["speed_transition_time_s"],
-            execution["course_transition_time_s"], duration,
+            execution, duration,
         )
         criteria[name] = (
             f"Set target ground speed {target_speed:.3f} m/s, absolute course "
             f"{target_course:.0f} degrees ({DIRECTIONS[j]}). "
             f"Approximate motion over {duration:.3f} s: endpoint "
             f"{position_text(motion['endpoint'])}; end speed {motion['end_speed']:.3f} m/s. "
-            + ("Zero target speed brakes over time; the simulator keeps the received bow direction. "
+            + ("Zero target speed brakes over time; the simulator ignores the requested course and cancels residual yaw within angular limits. "
                if target_speed == 0 else "")
         )
         if obstacles:
             future = predict_ground_motion(speed, course, target_speed, target_course,
-                execution["speed_transition_time_s"], execution["course_transition_time_s"], duration * 2)
+                execution, preview_duration(execution, duration, speed), dt=max(0.1, execution["fixed_dt_s"]))
             criteria[name] = describe_clearance(motion, future, obstacles,
-                boat.get("collision_radius_m", 0.5)) + criteria[name]
+                boat["collision_radius_m"]) + criteria[name]
     payload = {
         "model": model,
         "state": {
@@ -326,7 +311,7 @@ def build_stop_payload(observation, model="jev-latest"):
                 "duration_s": duration,
                 **execution,
                 "frame": "Fixed east/north; course 0=N,90=E,180=S,270=W.",
-                "forecast": "Approximate ground-velocity forecast; bow direction, yaw rate and actuator progress are unavailable.",
+                "forecast": "Bounded-acceleration forecast from situation speed and measured heading/yaw; obstacles use current-position snapshots.",
             },
         },
         "questions": {
@@ -337,7 +322,7 @@ def build_stop_payload(observation, model="jev-latest"):
                     "Choose a zero target speed to brake and keep it zero once stopped. "
                     "Do not approach any waypoint or final circle, resume navigation, or accelerate to make progress. "
                     "Stopping has no position or arrival-circle requirement. "
-                    "The simulator ignores the course of a zero-speed command and brakes over its speed transition time; "
+                    "The simulator ignores the course of a zero-speed command and brakes at the configured maximum deceleration; "
                     "this does not instantly set actual speed to zero. "
                     "All original 64 choices remain available; no local controller chooses for you."
                 ),
@@ -345,6 +330,7 @@ def build_stop_payload(observation, model="jev-latest"):
             }
         },
     }
+    payload["state"]["braking"] = braking_facts(speed, execution, action_duration=duration)
     if obstacles:
         add_obstacle_state(payload["state"], observation, obstacles)
         payload["questions"]["action"]["instructions"] = AVOIDANCE_INSTRUCTIONS + payload["questions"]["action"]["instructions"]
@@ -360,7 +346,7 @@ def build_payload(observation, model="jev-latest"):
     task, boat = observation["task"], observation["boat"]
     execution = observation["execution"]
     duration = observation["planning"]["action_duration_s"]
-    speed = abs(boat["targetSpeed"]) * KNOT_MPS
+    speed = boat["targetSpeed"] * KNOT_MPS
     course = boat["targetCourse"]
     target = geometry.target
     distance = math.hypot(*target)
@@ -411,9 +397,11 @@ def build_payload(observation, model="jev-latest"):
             "duration_s": duration,
             **execution,
             "frame": "Fixed east/north; course 0=N,90=E,180=S,270=W. No bow-relative positions.",
-            "forecast": "Approximate ground-velocity forecast; assumes zero initial course rotation and a fresh response. Unknown startup direction uses candidate direction. Not a guarantee.",
+            "forecast": "Bounded acceleration and yaw forecast from measured heading/yaw, including at rest. Quantized situation inputs and frozen obstacle positions limit accuracy.",
         },
     }
+    state["braking"] = braking_facts(speed, execution, ceiling_mps=limit, action_duration=duration)
+    state["target"]["distance_to_circle_entry_m"] = max(0, distance - task["arrival_radius_m"])
     if obstacles:
         add_obstacle_state(state, observation, obstacles)
         state["task"]["background"] = BACKGROUND.replace(

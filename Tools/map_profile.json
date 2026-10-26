@@ -1,0 +1,12 @@
+{
+  "coordinate_scale": 40.0,
+  "sampling_step_m": 2.0,
+  "waypoint_speed_knots": [
+    10.0,
+    17.5,
+    25.0
+  ],
+  "final_speed_knots": 5.0,
+  "stop_speed_mps": 0.1,
+  "waypoint_radius_multiplier": 5.0
+}

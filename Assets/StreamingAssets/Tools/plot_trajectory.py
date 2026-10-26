@@ -43,6 +43,14 @@ def plot_run(document, output):
             ax.add_patch(Circle((last["x"], last["y"]), last["radius_m"], fill=False,
                                 edgecolor="red", linewidth=1.2,
                                 label="Moving obstacles (final positions)" if index == 0 else None))
+            safety = last.get("avoidance_radius_m")
+            if safety is not None:
+                ax.add_patch(Circle((last["x"], last["y"]), safety, fill=False,
+                                    edgecolor="darkorange", linestyle=":", linewidth=1,
+                                    label="Avoidance safety circles" if index == 0 else None))
+        last_sample = actual[-1]
+        ax.add_patch(Circle((last_sample["x"], last_sample["y"]), document.get("boat_radius_m", radius),
+                            fill=False, edgecolor="#0072BD", linewidth=1, label="Boat hull (final)"))
         if document["result"] == "failed":
             ax.plot(actual[-1]["x"], actual[-1]["y"], "x", color="red", markersize=9, zorder=6)
         ax.set_aspect("equal", adjustable="datalim")

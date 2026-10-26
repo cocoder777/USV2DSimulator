@@ -24,7 +24,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
     {
         public long tick;
         public double simulation_time;
-        public float x, y, speed;
+        public float x, y, speed, heading_deg, yaw_rate_deg_s, acceleration_mps2, angular_acceleration_deg_s2;
         public string mode;
         public JArray obstacles { get; set; }
     }
@@ -79,6 +79,8 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
     {
         samples.Add(new Sample { tick = boat.Tick, simulation_time = boat.SimulationTime,
             x = boat.Position.x, y = boat.Position.y, speed = boat.Speed, mode = boat.Mode.ToString(),
+            heading_deg = boat.HeadingDeg, yaw_rate_deg_s = boat.YawRateDeg,
+            acceleration_mps2 = boat.ActualAccelerationValue, angular_acceleration_deg_s2 = boat.ActualAngularAccelerationDeg,
             obstacles = boat.GetComponent<DynamicObstacleField>()?.Snapshot() });
     }
 
@@ -105,8 +107,10 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
             string name = "trajectory_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + "Z_" + episode;
             string data = Path.Combine(directory, name + ".json");
             var document = new { schema_version = 1, result = mission.Failed ? "failed" : "completed",
-                failure_reason = mission.FailureReason, boat_radius_m = DynamicObstacleField.BoatRadius, episode_id = episode,
-                map_level = RecordedMapLevel(),
+                failure_reason = mission.FailureReason, boat_radius_m = boat.CollisionRadius, episode_id = episode,
+                map_level = RecordedMapLevel(), parameters = BoatParameters.Capture(boat), action_duration_s = runner.actionDuration,
+                minimum_physical_clearance_m = GetComponent<DynamicObstacleField>()?.MinimumPhysicalClearance,
+                minimum_avoidance_clearance_m = GetComponent<DynamicObstacleField>()?.MinimumAvoidanceClearance,
                 route = recordedRoute, samples, simulation_time = boat.SimulationTime,
                 final_speed_mps = boat.Speed, passed_count = mission.Progress.NextIndex,
                 passing_max_speeds_mps = mission.Progress.PassingMaxSpeeds };

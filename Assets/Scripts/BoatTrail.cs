@@ -5,9 +5,9 @@ using UnityEngine;
 [RequireComponent(typeof(LineRenderer))]
 public class BoatTrail : MonoBehaviour
 {
-    public float pointSpacing = 0.1f;
-    public int maxPoints = 3000;
-    public float lineWidth = 0.04f;
+    public float pointSpacing = 2f;
+    public int maxPoints = 12000;
+    public float lineWidth = 0.7f;
 
     private LineRenderer line;
     private readonly List<Vector3> points = new List<Vector3>();

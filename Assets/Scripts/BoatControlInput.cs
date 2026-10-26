@@ -10,27 +10,31 @@ public class BoatControlInput : MonoBehaviour
     {
         if (Input.GetKeyDown(KeyCode.R)) { boat.ResetBoat(); return; }
         if (boat.Mode == BoatDynamics2D.ControlMode.Manual)
-            boat.SetControl(Input.GetAxisRaw("Vertical") * boat.maxAcceleration,
+            boat.SetControl(Input.GetAxisRaw("Vertical") * (Input.GetAxisRaw("Vertical") >= 0 ? boat.maxAcceleration : boat.maxDeceleration),
                 -Input.GetAxisRaw("Horizontal") * boat.maxAngularAccelerationDeg);
     }
 
     void OnGUI()
     {
-        float width = Mathf.Max(1, Screen.width - 20);
+        float guiScale = Mathf.Clamp(Screen.width / 1280f, 0.4f, 1.5f);
+        var previousMatrix = GUI.matrix;
+        GUI.matrix = Matrix4x4.Scale(new Vector3(guiScale, guiScale, 1));
+        float width = Mathf.Max(1, (Screen.width / guiScale) - 20);
         float modeWidth = width * 0.46f;
         float otherWidth = (width - modeWidth - 12) / 2;
         string label = "Mode: " + boat.Mode;
-        if (GUI.Button(new Rect(10, Screen.height - 45, modeWidth, 32), label))
+        if (GUI.Button(new Rect(10, (Screen.height / guiScale) - 45, modeWidth, 32), label))
             boat.SetMode((BoatDynamics2D.ControlMode)(((int)boat.Mode + 1) % 2));
-        if (GUI.Button(new Rect(16 + modeWidth, Screen.height - 45, otherWidth, 32), "Reload task"))
+        if (GUI.Button(new Rect(16 + modeWidth, (Screen.height / guiScale) - 45, otherWidth, 32), "Reload task"))
             GetComponent<MissionManager>()?.Reload();
         var runner = GetComponent<SimulationRunner>();
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev && runner != null
-            && GUI.Button(new Rect(22 + modeWidth + otherWidth, Screen.height - 45, otherWidth, 32),
+            && GUI.Button(new Rect(22 + modeWidth + otherWidth, (Screen.height / guiScale) - 45, otherWidth, 32),
                 runner.JevStarted ? "Retry Jev" : "Start Jev"))
         {
             if (runner.JevStarted) runner.Retry(); else runner.StartJev();
         }
+        GUI.matrix = previousMatrix;
     }
 
     void OnDisable() { if (boat != null) boat.ClearControl(); }

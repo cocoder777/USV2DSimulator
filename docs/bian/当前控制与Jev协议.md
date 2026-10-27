@@ -78,8 +78,8 @@ unity_only是本项目JSON扩展对象，不是甲方标准报文类型，不直
 | situation_timestamp:uint32 | 精确标记本次快照，不能只取最新缓存 |
 | collision_radii_m:对象 | key为全部平台ID，value为米；兼作完整性清单，标准态势没有半径和实体总数 |
 | max_speed_knots:number | Unity可调速度上限，用于生成固定8档比例和8航向；不能从实际速度或航点限速推得 |
-| execution:对象 | 保留现有层级，补充受限运动配置与当前转向状态，见下文；原两个 transition_time 字段保留并置 0，不参与新模型 |
-| arrival_radius_m:number、stop_speed_knots:number | 打卡半径（本艇圆形包络半径乘可调倍率，默认5倍）与停车阈值；立即停止使用独立低速阈值，不以转弯半径代替到点范围 |
+| execution:对象 | 保留受限运动配置与当前转向状态，见下文；移除恒为 0 且不参与模型的 speed_transition_time_s / course_transition_time_s |
+| arrival_radius_m:number、stop_speed_knots:number | arrival_radius_m 仅寻线任务提供，表示打卡半径（本艇包络半径乘可调倍率，默认5倍）；跟踪及其 STOP 省略。停车阈值保留，立即停止使用独立低速阈值，不以转弯半径代替到点范围 |
 
 execution 当前字段：`motion_model="bounded_acceleration"`、`max_acceleration_mps2`、`max_deceleration_mps2`、`max_yaw_rate_deg_s`、`max_angular_acceleration_deg_s2`、`fixed_dt_s`、`hull_length_m/hull_beam_m`；`heading_course_deg` 为北起顺时针实际艏向，`yaw_rate_deg_s` 为顺时针角速度，静止时仍有效。`active_target_course_deg/active_course_error_deg` 表示当前保持的航向目标及未取模角差，保证连续相同指令在过冲或跨 ±180° 时延续原转向分支。`obstacle_avoidance_radii_m` 以障碍物平台 ID 为 key，传递每目标安全半径；`collision_radii_m` 继续只表示实体碰撞半径并兼作完整实体清单。
 
@@ -90,6 +90,32 @@ STOP按simId/id读取已接收的正式任务上下文，正文不包含params�
 有可关联身份的非法采样/未知STOP上下文返回状态3，避免Unity无限等待。STOP状态的currentRoute为最近已接收正式任务的数量，停车动作不使用其导航进度。
 
 Unity先组播全部当前实体，再点播任务/停止；接收顺序不限。Python按半径表key与共同timestamp汇齐，缺一不可；3秒缺失报告失败，由用户Retry，绝不拿上轮补齐。消费后删除对应态势，缓存记录本身也有3秒有效期。同decision_id去重，较旧tick拒绝；新任务撤销旧任务等待和输出，退休身份不重新激活。只缓存正式任务配置供STOP，进入一次决策的态势全部来自当前采样。
+
+## 目标连线距离跟随任务（项目新增）
+
+`code="targetFollowing"` 区分运动目标距离跟随与原 `trackingMode` 航路点寻线。此编码和业务参数是本项目预研扩展，尚非甲方已定义算法；帧头、0x0660/0x0060/0x0666/0x0662/0x0664、单位和动作配对机制复用现有协议。
+
+```json
+{"simId":"episode","id":"run","code":"targetFollowing","params":{"platCode":1001,"targetPlatformId":3001,"minFollowingDistanceM":100,"maxFollowingDistanceM":200}}
+```
+
+跟随任务不提供 `planWaypointList/planWaypointNum/currentRoute`；本艇与目标身份必须不同，两实体半径之和 < 最小中心间距 < 最大中心间距，均为有限米制数值。目标半径位于 `unity_only.collision_radii_m`，目标必须参加当前快照屏障。目标 0x0060 使用原有位置、实际速度及运动方向，不新增类型枚举；direction 方位不能当作运动方向。目标速度未知、运动中方向未知或本轮目标缺失均失败暂停，不使用旧缓存补齐。`unity_only` 仍复用动作时长、执行状态、快照与停止阈值；跟踪省略不参与判定的 arrival_radius_m。客户端需重启加载该适配变化，旧格式中存在的多余字段仍可接收。
+
+Python 内部 `observation.task.mode="target_following"`，目标放在独立 `target`，其他实体为 `obstacles`。HTTP `state.task.guidance="line_of_sight_distance"`；`line_reference` 是目标朝向当前本艇的一侧、距目标为区间中点的位置：pF=pT-dRef*(pT-pB)/|pT-pB|。该点不根据目标运动方向定义；不要求本艇在目标后方，不惩罚侧方或前方。距离处于区间内时不强求精确中点，参考点与本艇重合也不表示应停车。原目标方向缓存仅保留内部兼容，后方／横向关系仅由 Unity 作为历史对照指标记录，不再用作模型控制目标。
+
+模型状态提供当前距离、距离变化率、目标与本艇速度在当前连线上的径向分量、目标是否正趋近本艇及直接远离方位；每候选仍提供联合时刻的最小／最大距离、末端距离／距离变化率、本艇末端运动、软参考误差、径向制动余量和长预览。过近或预测将逼近下限时要求主动转向／运动拉开距离，尤其关注迎面目标，必要时安全侧向绕开；本艇零速不会阻止目标继续逼近，不能反复停车等待。超距时仍应安全追近，不能仅因目标正在接近就逃离。直接远离方位仅为几何事实，不是本地代选指令；转向／加速惯性及障碍可能要求另一侧逃逸。
+
+跟踪候选保留 Choice API 的字符串格式和原 64 个 ID；字符串内容改为 JSON 数值表，`state.candidate_schema` 一次解释数组顺序与单位，`state.warning_meanings` 一次解释显式警告码。`range_m/preview_range_m` 为最小、最大、末端距离；`target_hull_clearance_m` 为动作及长预览最小目标实体净距；障碍实体净距包含动作最小／末端及预览最小／末端，安全净距包含动作最小与预览最小／末端。`end_motion`、末端距离变化率、径向制动距离及余量、参考误差、转向误差全部保留。速度字段随模型单位变为 `_mps` 或 `_knots`，其他数值仍为米、度、度每秒。当前距离、当前参考误差、动作时长和预览时长由公共状态提供，候选不重复这些值；不再重复相同的规则、单位和假设段落。
+
+跟踪仅移除与停车距离完全相同的 `braking.distance_to_ceiling_m`，保留 `distance_to_stop_m`；径向制动距离与本艇停车距离含义不同，仍保留。跟踪运动预测通过 `route_details=False` 跳过未使用的中点积分与路径速度数组，端点、逐段路径、速度／角运动及碰撞预测不变。寻线继续使用完整中点与速度数组计算入圈和通过速度。连线参考坐标及 Unity 纵横向诊断未删除。
+
+目标仍按当前速度做匀速预测，未来转弯／急停未知；其他障碍物仍冻结当前位置计算净距。保持原 64 候选，不做本地排序、过滤或代选。当前动作与长时间保持指令的预览警告分开；当前已经过近时所有候选最小值均含初态，比较末端变化及长预览恢复。制动余量为近似同向、目标匀速时的径向估计，不是转弯安全保证。
+
+超距时 HTTP `state.range_recovery` 表达当前恢复阶段、目标方位、带符号航向误差、当前运动是否背离及转向角速度。仅根据当前几何判断：本艇航向与目标方位的绝对误差超过 90° 为 `reorient_before_catchup`，否则为 `close_range`。前者给各候选增加动作末端航向误差与指令方位误差，标注零速不转向及背离指令。要求 Jev 持续执行有用的安全转向，不因掉头第一秒仍增距而反复取消，避免沿错误方向加速；碰撞与障碍安全仍优先。这是决策请求表达，无本地动作代选、排序、过滤或执行端强制限速；区间内只有预计将失距时提示提前恢复，静态相对方位本身不是误差；STOP 不附带恢复阶段。正式任务和态势报文未增加字段。
+
+在区间外半段（中心距不小于区间中点）且正在增距时，若航向仍背离目标，还比较到达上限的时间 `(dMax-d)/range_rate` 与恢复到朝向目标半平面的估计时间。后者按超过 90° 的角度、角速度／角加速度限制及当前角速度估计，并加一个决策间隔；时间不足即提前启用同一恢复阶段。仅该情况补充 `trigger=opening_threatens_maximum_before_turn`、`time_to_maximum_at_current_range_rate_s` 和 `estimated_time_to_inward_heading_s`。这是当前距离变化率及方位的近似，不是未来目标轨迹或安全保证；最低非零速度不是强制限速。
+
+未来目标脚本、整段轨迹及场景时长不进入决策请求。进入距离区间持续执行，超距记录并尝试恢复；Unity 到达实验时长后结束，不保证跟随合格或零速。状态 params.targetPlatformId 标记目标，不伪造 currentRoute。STOP 从已接收任务恢复配置并用当前完整快照，采用独立停车题目，暂停距离跟随与主动远离目标；即使制动期间超过场景时长，也继续到实际停稳后发 stop_completed，导出 stopped。实体碰撞仍优先于同一步结束判定。
 
 ## 控制与状态关联
 

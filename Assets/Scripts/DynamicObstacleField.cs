@@ -29,7 +29,8 @@ public sealed class DynamicObstacleField : MonoBehaviour
         public string id;
         public int platformId;
         public bool large;
-        public Vector2 center, axis, position;
+        public FollowingScenarioData.Obstacle configured;
+        public Vector2 center, axis, position, previousPosition;
         public LineRenderer hull, safety;
     }
     private readonly List<Obstacle> obstacles = new();
@@ -40,13 +41,15 @@ public sealed class DynamicObstacleField : MonoBehaviour
     private double elapsed;
     public float? MinimumPhysicalClearance { get; private set; }
     public float? MinimumAvoidanceClearance { get; private set; }
+    public float? MinimumTargetPhysicalClearance { get; private set; }
+    public float? MinimumTargetSafetyClearance { get; private set; }
 
     void Awake()
     {
         mission = GetComponent<MissionManager>(); boat = GetComponent<BoatDynamics2D>();
         material = new Material(Shader.Find("Sprites/Default"));
     }
-    void OnEnable() { boat.ResetPerformed += ResetField; if (mission.Route != null) ResetField(); }
+    void OnEnable() { boat.ResetPerformed += ResetField; if (mission.HasTask) ResetField(); }
     void OnDisable() { boat.ResetPerformed -= ResetField; ClearVisuals(); }
     void OnDestroy()
     {
@@ -60,8 +63,8 @@ public sealed class DynamicObstacleField : MonoBehaviour
         patrolAmplitude = 20; patrolAngularFrequency = 0.04f;
         ResetField();
     }
-    private float Radius(Obstacle obstacle) => obstacle.large ? largeCollisionRadius : smallCollisionRadius;
-    private float Avoidance(Obstacle obstacle) => Mathf.Max(Radius(obstacle),
+    private float Radius(Obstacle obstacle) => obstacle.configured?.radius_m ?? (obstacle.large ? largeCollisionRadius : smallCollisionRadius);
+    private float Avoidance(Obstacle obstacle) => obstacle.configured?.avoidance_radius_m ?? Mathf.Max(Radius(obstacle),
         obstacle.large ? largeAvoidanceRadius : smallAvoidanceRadius);
     public float CollisionRadius(int platformId) => Radius(obstacles.Find(o => o.platformId == platformId));
     public JObject AvoidanceRadii()
@@ -85,7 +88,9 @@ public sealed class DynamicObstacleField : MonoBehaviour
         ClearVisuals();
         elapsed = 0;
         MinimumPhysicalClearance = MinimumAvoidanceClearance = null;
+        MinimumTargetPhysicalClearance = MinimumTargetSafetyClearance = null;
         CreateField();
+        if (mission.IsFollowing) MeasureFollowingTarget(mission.Following.Position, mission.Following.Position);
     }
     private void ClearVisuals()
     {
@@ -99,6 +104,21 @@ public sealed class DynamicObstacleField : MonoBehaviour
     }
     private void CreateField()
     {
+        if (mission.IsFollowing)
+        {
+            if (!mission.Following.ObstaclesEnabled) return;
+            foreach (var definition in mission.Following.Scenario.obstacles)
+            {
+                int id = 2001 + obstacles.Count;
+                obstacles.Add(new Obstacle { id = "obstacle_" + id, platformId = id, configured = definition,
+                    center = new Vector2(definition.x, definition.y), position = new Vector2(definition.x, definition.y),
+                    previousPosition = new Vector2(definition.x, definition.y),
+                    axis = FollowingTarget.Direction(definition.axis_course_deg),
+                    hull = MakeCircle("ObstacleHull_" + id, Color.red, 0.8f),
+                    safety = MakeCircle("ObstacleSafety_" + id, new Color(1, .4f, .15f, .65f), .5f) });
+            }
+            Draw(); return;
+        }
         var route = mission.Route;
         if (route == null) return;
         for (int i = 1; i < route.waypoints.Length && obstacles.Count < maximumObstacles; i++)
@@ -128,13 +148,14 @@ public sealed class DynamicObstacleField : MonoBehaviour
         Draw();
     }
     private Vector2 PositionAt(Obstacle obstacle, double time) => obstacle.center
-        + obstacle.axis * (patrolAmplitude * Mathf.Sin((float)time * patrolAngularFrequency));
+        + obstacle.axis * ((obstacle.configured?.amplitude_m ?? patrolAmplitude)
+            * Mathf.Sin((float)time * (obstacle.configured?.frequency_rad_s ?? patrolAngularFrequency)));
     public string Step(float dt, Vector2 previousBoat, Vector2 currentBoat)
     {
         string collision = null;
         foreach (var obstacle in obstacles)
         {
-            var previous = obstacle.position; obstacle.position = PositionAt(obstacle, elapsed + dt);
+            var previous = obstacle.position; obstacle.previousPosition = previous; obstacle.position = PositionAt(obstacle, elapsed + dt);
             float distance = SweptDistance(previousBoat - previous, currentBoat - obstacle.position);
             float physical = distance - Radius(obstacle) - boat.CollisionRadius;
             float avoidance = distance - Avoidance(obstacle) - boat.CollisionRadius;
@@ -143,6 +164,20 @@ public sealed class DynamicObstacleField : MonoBehaviour
             if (physical <= 0) collision ??= obstacle.id;
         }
         elapsed += dt; Draw(); return collision;
+    }
+    public string MeasureFollowingTarget(Vector2 previous, Vector2 current)
+    {
+        string collision = null;
+        foreach (var obstacle in obstacles)
+        {
+            float distance = SweptDistance(previous - obstacle.previousPosition, current - obstacle.position);
+            float physical = distance - mission.Following.Scenario.target.radius_m - Radius(obstacle);
+            float safety = distance - mission.Following.Scenario.target.radius_m - Avoidance(obstacle);
+            MinimumTargetPhysicalClearance = Mathf.Min(MinimumTargetPhysicalClearance ?? float.PositiveInfinity, physical);
+            MinimumTargetSafetyClearance = Mathf.Min(MinimumTargetSafetyClearance ?? float.PositiveInfinity, safety);
+            if (physical <= 0) collision ??= "target / " + obstacle.id;
+        }
+        return collision;
     }
     public static float SweptDistance(Vector2 start, Vector2 end)
     {
@@ -169,8 +204,9 @@ public sealed class DynamicObstacleField : MonoBehaviour
         foreach (var obstacle in obstacles)
         {
             var position = ObservationBuilder.LonLat(obstacle.position.x, obstacle.position.y);
-            var velocity = obstacle.axis * (patrolAmplitude * patrolAngularFrequency
-                * Mathf.Cos((float)elapsed * patrolAngularFrequency));
+            float amplitude = obstacle.configured?.amplitude_m ?? patrolAmplitude;
+            float frequency = obstacle.configured?.frequency_rad_s ?? patrolAngularFrequency;
+            var velocity = obstacle.axis * (amplitude * frequency * Mathf.Cos((float)elapsed * frequency));
             double speed = velocity.magnitude / DiscreteAction.MetresPerSecondPerKnot;
             double? course = speed < 0.000001 ? null : Mathf.Repeat(Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 360);
             var record = ObservationBuilder.Record(obstacle.platformId, position, speed, course);

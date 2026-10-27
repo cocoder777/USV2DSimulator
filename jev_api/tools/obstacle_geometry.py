@@ -57,7 +57,7 @@ def snapshot_clearance(path, obstacles, hull, radius_key="radius_m"):
     return minimum
 
 
-def describe_clearance(motion, future, obstacles, hull):
+def clearance_facts(motion, future, obstacles, hull):
     clearance = snapshot_clearance(motion["path"], obstacles, hull)
     preview = snapshot_clearance(future["path"], obstacles, hull)
     end = snapshot_clearance([motion["endpoint"], motion["endpoint"]], obstacles, hull)
@@ -65,6 +65,14 @@ def describe_clearance(motion, future, obstacles, hull):
     safety_end = snapshot_clearance([future["endpoint"], future["endpoint"]], obstacles, hull, "avoidance_radius_m")
     safety = snapshot_clearance(motion["path"], obstacles, hull, "avoidance_radius_m")
     preview_safety = snapshot_clearance(future["path"], obstacles, hull, "avoidance_radius_m")
+    return {"obstacle_hull_clearance_m": [clearance, end, preview, future_end],
+            "obstacle_safety_clearance_m": [safety, preview_safety, safety_end]}
+
+
+def describe_clearance(motion, future, obstacles, hull):
+    facts = clearance_facts(motion, future, obstacles, hull)
+    clearance, end, preview, future_end = facts["obstacle_hull_clearance_m"]
+    safety, preview_safety, safety_end = facts["obstacle_safety_clearance_m"]
     return (
         ("AVOIDANCE SAFETY CIRCLE WARNING: predicted safety-boundary intrusion; choose an early bypass. "
          if min(safety, preview_safety) < 0 else "")

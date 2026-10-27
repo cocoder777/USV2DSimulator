@@ -1,0 +1,126 @@
+{
+  "scenario_id": "following_complex",
+  "duration_s": 180,
+  "initial_state": {
+    "x": 0,
+    "y": 0,
+    "heading_deg": 90,
+    "speed": 5.144444444444445,
+    "yaw_rate_deg": 0
+  },
+  "target": {
+    "x": 0,
+    "y": 150,
+    "course_deg": 0,
+    "speed_knots": 10,
+    "radius_m": 6,
+    "acceleration_mps2": 1.46,
+    "deceleration_mps2": 3.5
+  },
+  "segments": [
+    {
+      "start_s": 0,
+      "speed_knots": 10,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 15,
+      "speed_knots": 10,
+      "yaw_rate_deg_s": 10
+    },
+    {
+      "start_s": 24,
+      "speed_knots": 14,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 42,
+      "speed_knots": 12,
+      "yaw_rate_deg_s": -12
+    },
+    {
+      "start_s": 49.5,
+      "speed_knots": 10,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 65,
+      "speed_knots": 0,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 75,
+      "speed_knots": 12,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 90,
+      "speed_knots": 12,
+      "yaw_rate_deg_s": -10
+    },
+    {
+      "start_s": 99,
+      "speed_knots": 16,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 113,
+      "speed_knots": 8,
+      "yaw_rate_deg_s": 12
+    },
+    {
+      "start_s": 128,
+      "speed_knots": 14,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 142,
+      "speed_knots": 0,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 152,
+      "speed_knots": 10,
+      "yaw_rate_deg_s": -12
+    },
+    {
+      "start_s": 160,
+      "speed_knots": 12,
+      "yaw_rate_deg_s": 0
+    },
+    {
+      "start_s": 174,
+      "speed_knots": 0,
+      "yaw_rate_deg_s": 0
+    }
+  ],
+  "obstacles": [
+    {
+      "x": 65,
+      "y": 115,
+      "radius_m": 4,
+      "avoidance_radius_m": 50,
+      "amplitude_m": 5,
+      "frequency_rad_s": 0.06,
+      "axis_course_deg": 90
+    },
+    {
+      "x": 125,
+      "y": 175,
+      "radius_m": 10,
+      "avoidance_radius_m": 60,
+      "amplitude_m": 0,
+      "frequency_rad_s": 0,
+      "axis_course_deg": 0
+    },
+    {
+      "x": 65,
+      "y": 600,
+      "radius_m": 4,
+      "avoidance_radius_m": 45,
+      "amplitude_m": 8,
+      "frequency_rad_s": 0.05,
+      "axis_course_deg": 90
+    }
+  ]
+}

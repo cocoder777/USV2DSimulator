@@ -339,6 +339,9 @@ def build_stop_payload(observation, model="jev-latest"):
 
 @model_speed_units
 def build_payload(observation, model="jev-latest"):
+    if "target" in observation and observation["task"].get("mode") in ("target_following", "immediate_stop"):
+        from tools.following_geometry import build_following_payload
+        return build_following_payload(observation, model, ACTION_CHOICES)
     if observation["task"].get("mode") == "immediate_stop":
         return build_stop_payload(observation, model)
     geometry = WaypointGeometry(observation)

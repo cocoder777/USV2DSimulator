@@ -53,8 +53,6 @@
     "execution": {
       "duration_s": 1.0,
       "motion_model": "bounded_acceleration",
-      "speed_transition_time_s": 0,
-      "course_transition_time_s": 0,
       "max_acceleration_mps2": 1.46,
       "max_deceleration_mps2": 1.75,
       "max_yaw_rate_deg_s": 12.0,

@@ -89,7 +89,7 @@ public class BoatUdpBridge : MonoBehaviour
             if (packet[field] != null) local[field] = packet[field].DeepClone();
         local["event"] = type;
         var content = new JObject { ["simId"] = packet["episode_id"]?.DeepClone(),
-            ["id"] = packet["run_id"]?.DeepClone(), ["code"] = "trackingMode",
+            ["id"] = packet["run_id"]?.DeepClone(), ["code"] = GetComponent<MissionManager>().TaskCode,
             ["params"] = obs?["params"]?.DeepClone() ?? packet["params"]?.DeepClone() ?? new JObject { ["platCode"] = 1001 }, ["unity_only"] = local };
         string taskIdentity = (string)content["simId"] + "/" + (string)content["id"];
         if (statusIdentity != taskIdentity || type == "decision_request" || type == "stop_request")
@@ -155,7 +155,7 @@ public class BoatUdpBridge : MonoBehaviour
                             {
                                 var status = reassembler.Add(data, source.ToString());
                                 if (status == null) continue;
-                                if ((string)status["code"] != "trackingMode") throw new FormatException("Unexpected algorithm code.");
+                                if ((string)status["code"] is not ("trackingMode" or "targetFollowing")) throw new FormatException("Unexpected algorithm code.");
                                 if ((int?)status["status"] is not (1 or 2 or 3)) throw new FormatException("Invalid algorithm status.");
                                 var meta = status["params"]?["unity_only"] as JObject;
                                 var result = StatusEnvelope(status, meta);

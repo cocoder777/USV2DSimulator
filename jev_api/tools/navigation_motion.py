@@ -32,7 +32,7 @@ def bounded_turn(delta, initial_yaw, maximum_yaw, acceleration, t):
     return direction * angle, direction * velocity
 
 
-def predict_ground_motion(speed_mps, course_deg, target_speed_mps, target_course_deg, execution, duration, dt=None):
+def predict_ground_motion(speed_mps, course_deg, target_speed_mps, target_course_deg, execution, duration, dt=None, *, route_details=True):
     """Integrate at the plant timestep, including measured angular state at rest."""
     dt = execution["fixed_dt_s"] if dt is None else dt
     if not math.isfinite(duration) or duration <= 0 or not math.isfinite(dt) or dt <= 0:
@@ -63,7 +63,8 @@ def predict_ground_motion(speed_mps, course_deg, target_speed_mps, target_course
 
     def integrate(end, capture=False):
         x = y = 0.0
-        path, speeds = [[0.0, 0.0]], [speed_at(0)]
+        path = [[0.0, 0.0]] if capture else []
+        speeds = [speed_at(0)] if capture and route_details else []
         count = math.ceil(end / dt)
         for i in range(count):
             start, stop = i * dt, min((i + 1) * dt, end)
@@ -74,15 +75,17 @@ def predict_ground_motion(speed_mps, course_deg, target_speed_mps, target_course
             y += sum(w * p[1] for w, p in zip(weights, samples)) * step / 12
             if capture:
                 path.append([x, y])
-                speeds.append(speed_at(stop))
+                if route_details:
+                    speeds.append(speed_at(stop))
         return [x, y], path, speeds
 
-    midpoint, _, _ = integrate(duration / 2)
+    midpoint = integrate(duration / 2)[0] if route_details else None
     endpoint, path, speeds = integrate(duration, True)
     angle, yaw = bounded_turn(delta, initial_yaw, yaw_limit, angular, duration)
-    return {"midpoint": midpoint, "endpoint": endpoint, "end_speed": speed_at(duration),
+    result = {"endpoint": endpoint, "end_speed": speed_at(duration),
             "end_course_deg": (90 - initial_angle - angle) % 360, "end_yaw_rate_deg_s": -yaw,
-            "path": path, "path_speeds": speeds}
+            "path": path}
+    return {"midpoint": midpoint, **result, "path_speeds": speeds} if route_details else result
 
 
 def braking_facts(speed_mps, execution, ceiling_mps=0, action_duration=1):

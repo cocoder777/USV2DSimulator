@@ -8,6 +8,7 @@ public class BoatParameterPanel : MonoBehaviour
     private Vector2 scrollPosition;
     private float simulationSpeed = 1f;
     private float previousTimeScale;
+    private string minimumDistance = "100", maximumDistance = "200", followingError;
     private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
     private static readonly string[] decisionModes = { "Paused", "Continuous" };
     private static readonly string[] mapDescriptions = {
@@ -84,6 +85,42 @@ public class BoatParameterPanel : MonoBehaviour
 
         if (mission != null)
         {
+            GUILayout.Label("TASK MODE", titleStyle);
+            int taskMode = GUILayout.SelectionGrid((int)mission.Mode, new[] { "Route following", "Distance following" }, 2);
+            if (taskMode != (int)mission.Mode) mission.SelectTaskMode((MissionManager.TaskMode)taskMode);
+            if (mission.IsFollowing)
+            {
+                var follow = mission.Following;
+                GUILayout.Label("FOLLOWING MAP", titleStyle);
+                int scenario = GUILayout.SelectionGrid(follow.ScenarioIndex, FollowingTarget.ScenarioNames, 2);
+                if (scenario != follow.ScenarioIndex) mission.SelectFollowingScenario(scenario);
+                if (follow.Scenario.obstacles.Length > 0)
+                {
+                    bool enabled = GUILayout.Toggle(follow.ObstaclesEnabled, "Scenario obstacles (switching resets)");
+                    if (enabled != follow.ObstaclesEnabled) follow.SetObstaclesEnabled(enabled);
+                    GUILayout.Label($"Target route safety margin: {follow.Scenario.PlannedTargetSafetyClearance:F1} m", hintStyle);
+                }
+                GUILayout.Label("Center-to-center distance (metres)", hintStyle);
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Min", GUILayout.Width(30)); minimumDistance = GUILayout.TextField(minimumDistance, GUILayout.Width(80));
+                GUILayout.Label("Max", GUILayout.Width(30)); maximumDistance = GUILayout.TextField(maximumDistance, GUILayout.Width(80));
+                GUILayout.EndHorizontal();
+                if (GUILayout.Button("Apply distances and reset"))
+                {
+                    var culture = System.Globalization.CultureInfo.InvariantCulture;
+                    followingError = float.TryParse(minimumDistance, System.Globalization.NumberStyles.Float, culture, out var min)
+                        && float.TryParse(maximumDistance, System.Globalization.NumberStyles.Float, culture, out var max)
+                        && follow.ConfigureDistances(min, max) ? null : "Use finite min > combined hull radii, max > min.";
+                }
+                if (followingError != null) GUILayout.Label(followingError, hintStyle);
+                GUILayout.Label($"Active range: {follow.MinDistance:F1} - {follow.MaxDistance:F1} m", labelStyle);
+                GUILayout.Label($"Target: {follow.Speed / DiscreteAction.MetresPerSecondPerKnot:F1} knots | {follow.TrackingStatus}", labelStyle);
+                GUILayout.Label($"Range: {follow.Distance:F1} m | changing {follow.RangeRate:F2} m/s", labelStyle);
+                GUILayout.Label($"Elapsed: {follow.Elapsed:F1} / {follow.Scenario.duration_s:F0} s | in band: {(follow.Elapsed > 0 ? follow.InBandTime / follow.Elapsed : 0):P0}", labelStyle);
+                GUILayout.Label("Magenta: target/trail. Red/green: distance limits. Cyan: reference on the boat-target line.", hintStyle);
+            }
+            else
+            {
             GUILayout.Label("MAP LEVEL", titleStyle);
             int selected = string.IsNullOrWhiteSpace(mission.routeFile) ? mission.MapLevel : -1;
             int next = GUILayout.SelectionGrid(selected, mapButtons, 3, GUILayout.Height(52));
@@ -91,6 +128,7 @@ public class BoatParameterPanel : MonoBehaviour
             GUILayout.Label(string.IsNullOrWhiteSpace(mission.routeFile)
                 ? mapDescriptions[mission.MapLevel] : "Custom task", labelStyle);
             GUILayout.Label("Switching maps resets the boat and task.", hintStyle);
+            }
             if (!string.IsNullOrEmpty(mission.LoadError)) GUILayout.Label(mission.LoadError, hintStyle);
             GUILayout.Space(8);
         }
@@ -117,8 +155,8 @@ public class BoatParameterPanel : MonoBehaviour
             if (boat.Mode == BoatDynamics2D.ControlMode.Jev && !runner.JevStarted
                 && GUILayout.Button("Start Jev", GUILayout.Height(28))) runner.StartJev();
             GUI.enabled = enabled && boat.Mode == BoatDynamics2D.ControlMode.Jev
-                && runner.JevStarted && !runner.StopRequested && mission?.Progress != null
-                && !mission.Progress.Completed;
+                && runner.JevStarted && !runner.StopRequested && mission != null && mission.HasTask
+                && !mission.Completed;
             if (GUILayout.Button("Stop via Jev", GUILayout.Height(28))) runner.RequestImmediateStop();
             GUI.enabled = enabled;
             if (runner.StopRequested) GUILayout.Label("Jev stop requested: braking in place.", hintStyle);
@@ -155,8 +193,11 @@ public class BoatParameterPanel : MonoBehaviour
         boat.lengthMetres = DrawSlider("Hull length", boat.lengthMetres, 1f, 30f, "m");
         boat.beamMetres = DrawSlider("Hull beam", boat.beamMetres, 0.5f, 10f, "m");
         GUILayout.Label($"Circular hull radius: {boat.CollisionRadius:F2} m (collision)", hintStyle);
-        boat.waypointRadiusMultiplier = DrawSlider("Waypoint radius multiplier", boat.waypointRadiusMultiplier, 1f, 20f, "x");
-        GUILayout.Label($"Waypoint acceptance radius: {boat.WaypointRadius:F2} m", hintStyle);
+        if (mission == null || !mission.IsFollowing)
+        {
+            boat.waypointRadiusMultiplier = DrawSlider("Waypoint radius multiplier", boat.waypointRadiusMultiplier, 1f, 20f, "x");
+            GUILayout.Label($"Waypoint acceptance radius: {boat.WaypointRadius:F2} m", hintStyle);
+        }
         GUILayout.Label("Speed and turn rates are acceleration-limited. Settings apply in Manual and Jev modes.", hintStyle);
         var obstacles = GetComponent<DynamicObstacleField>();
         if (obstacles != null)

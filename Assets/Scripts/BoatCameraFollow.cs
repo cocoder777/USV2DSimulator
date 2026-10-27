@@ -28,7 +28,14 @@ public class BoatCameraFollow : MonoBehaviour
         Vector3 focus = target.position;
         // Follow the rendered boat exactly, including while waiting for a decision.
         float size = orthographicSize;
-        if (overview && mission?.Route != null)
+        if (overview && mission != null && mission.IsFollowing)
+        {
+            var other = mission.Following.Position;
+            focus = (target.position + new Vector3(other.x, other.y, 0)) / 2;
+            size = Mathf.Max(Mathf.Abs(other.y - target.position.y) / 2 + mission.Following.MaxDistance,
+                (Mathf.Abs(other.x - target.position.x) / 2 + mission.Following.MaxDistance) / view.aspect);
+        }
+        else if (overview && mission?.Route != null)
         {
             var points = mission.Route.waypoints;
             var bounds = new Bounds(new Vector3(points[0].x, points[0].y, 0), Vector3.zero);

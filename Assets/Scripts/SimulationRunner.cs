@@ -57,13 +57,13 @@ public sealed class SimulationRunner : MonoBehaviour
     }
     public void StartJev()
     {
-        if (mission.Failed || boat.Mode != BoatDynamics2D.ControlMode.Jev || mission.Progress == null || mission.Progress.Completed) return;
+        if (mission.Failed || boat.Mode != BoatDynamics2D.ControlMode.Jev || !mission.HasTask || mission.Completed) return;
         Invalidate(); StopRequested = false; JevStarted = true; Pump();
     }
     public void RequestImmediateStop()
     {
         if (mission.Failed || boat.Mode != BoatDynamics2D.ControlMode.Jev || !JevStarted || StopRequested
-            || mission.Progress == null || mission.Progress.Completed) return;
+            || !mission.HasTask || mission.Completed) return;
         Invalidate(); StopRequested = true; BeginDecision();
     }
     public void StopJev() { JevStarted = false; StopRequested = false; Invalidate(); }
@@ -90,8 +90,8 @@ public sealed class SimulationRunner : MonoBehaviour
         mission.SynchronizeHull();
         bridge?.PumpIncoming();
         if (mission.Failed) { State = RunState.Failed; LastError = mission.FailureReason; return; }
-        if (mission.Progress == null) { State = RunState.Initializing; return; }
-        if (mission.Progress.Completed)
+        if (!mission.HasTask) { State = RunState.Initializing; return; }
+        if (mission.Completed && !StopRequested && State != RunState.Stopped)
         { CompleteMission(); return; }
         if (boat.Mode != BoatDynamics2D.ControlMode.Jev)
         { State = RunState.Manual; return; }
@@ -159,14 +159,14 @@ public sealed class SimulationRunner : MonoBehaviour
         bridge?.QueuePacket(new JObject {
             ["type"] = type, ["session_id"] = boat.SessionId, ["episode_id"] = boat.EpisodeId,
             ["run_id"] = boat.RunId, ["tick"] = boat.Tick,
-            ["params"] = new JObject { ["platCode"] = 1001,
-                ["currentRoute"] = Math.Max(0, (mission.Progress?.NextIndex ?? 1) - 1) }
+            ["params"] = mission.IsFollowing ? new JObject { ["platCode"] = 1001, ["targetPlatformId"] = FollowingTarget.PlatformId }
+                : new JObject { ["platCode"] = 1001, ["currentRoute"] = Math.Max(0, (mission.Progress?.NextIndex ?? 1) - 1) }
         });
     }
     public bool Advance(float dt)
     {
         Pump();
-        if (mission.Failed || mission.Progress == null || mission.Progress.Completed || State == RunState.Failed) return false;
+        if (mission.Failed || !mission.HasTask || (mission.Completed && !StopRequested) || State == RunState.Failed) return false;
         if (boat.Mode == BoatDynamics2D.ControlMode.Jev)
         {
             try { if (!player.PrepareStep(dt)) return false; }
@@ -175,6 +175,12 @@ public sealed class SimulationRunner : MonoBehaviour
         Vector2 previous = boat.Position; float previousSpeed = boat.Speed;
         boat.Step(dt);
         string collision = obstacles.Step(dt, previous, boat.Position);
+        if (mission.IsFollowing)
+        {
+            var previousTarget = mission.Following.Position;
+            collision = mission.Following.Step(dt, previous, boat.Position) ?? collision;
+            collision = obstacles.MeasureFollowingTarget(previousTarget, mission.Following.Position) ?? collision;
+        }
         if (collision != null)
         {
             mission.FailCollision(collision);
@@ -191,7 +197,7 @@ public sealed class SimulationRunner : MonoBehaviour
             JevStarted = false; State = RunState.Stopped;
             NotifySimulation("stop_completed");
         }
-        if (mission.Progress.Completed) CompleteMission();
+        if (mission.Completed && !StopRequested && State != RunState.Stopped) CompleteMission();
         StepCompleted?.Invoke();
         return true;
     }

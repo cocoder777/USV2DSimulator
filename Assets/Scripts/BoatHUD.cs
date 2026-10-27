@@ -25,7 +25,7 @@ public class BoatHUD : MonoBehaviour
         statusText.text =
             "USV 2D SIMULATOR\n" +
             $"Mode: {boat.Mode}\nUDP: {connection}\n" +
-            $"Task: {mission?.Status ?? "NoTask"}  Next: {mission?.Progress?.Next?.id ?? "--"}\n" +
+            $"Task: {mission?.Mode} / {mission?.Status ?? "NoTask"}  Next: {mission?.Progress?.Next?.id ?? "--"}\n" +
             $"Decision: {decision?.Status ?? "--"}\n" +
             $"Action duration: {decision?.actionDuration:F2} s\n" +
 

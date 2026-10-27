@@ -11,7 +11,8 @@ from tools.waypoint_geometry import xy, EARTH_RADIUS, KNOT_MPS, WaypointGeometry
 from tools.navigation_motion import predict_ground_motion, bounded_turn, braking_facts, preview_duration
 from tools.obstacle_geometry import nearby_obstacles, snapshot_clearance
 from boat_client import valid_request
-from tools.client_protocol import UnitySnapshotAdapter, TASK
+from tools.client_protocol import UnitySnapshotAdapter, TASK, STOP
+from tools.following_geometry import moving_range, relative_facts, line_reference_facts, course_error
 COURSES_DEG = tuple(range(0,360,45))
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +26,6 @@ def geo(x, y):
 
 def execution(heading=90, yaw=0):
     return {"motion_model": "bounded_acceleration",
-            "speed_transition_time_s": 0, "course_transition_time_s": 0,
             "max_acceleration_mps2": 1.46, "max_deceleration_mps2": 1.75,
             "max_yaw_rate_deg_s": 12, "max_angular_acceleration_deg_s2": 4,
             "heading_course_deg": heading, "yaw_rate_deg_s": yaw, "fixed_dt_s": 0.02,
@@ -108,7 +108,7 @@ class NavigationTests(unittest.TestCase):
     def test_arrival_multiplier_does_not_enlarge_collision_hull(self):
         obs=observation()
         hull=obs["boat"]["collision_radius_m"]
-        self.assertAlmostEqual(obs["task"]["arrival_radius_m"],hull*10)
+        self.assertAlmostEqual(obs["task"]["arrival_radius_m"],hull*5)
         self.assertAlmostEqual(hull,6.0440052945)
 
     def test_protocol_rejects_invalid_limits_state_and_timing(self):
@@ -215,6 +215,15 @@ class NavigationTests(unittest.TestCase):
     def test_preview_covers_turn_and_braking(self):
         self.assertGreaterEqual(preview_duration(execution(), 1, 50*KNOT_MPS), 21)
 
+    def test_following_omits_only_unused_route_details(self):
+        for heading, yaw, target_speed, course in [(180, 0, 3, 0), (359, -4, 0, 90), (0, 8, 12, 315)]:
+            state = execution(heading, yaw)
+            full = predict_ground_motion(5, heading, target_speed, course, state, 1.03)
+            lean = predict_ground_motion(5, heading, target_speed, course, state, 1.03, route_details=False)
+            self.assertEqual(lean, {k: v for k, v in full.items() if k not in ('midpoint', 'path_speeds')})
+            self.assertIn('midpoint', full)
+            self.assertEqual(len(full['path']), len(full['path_speeds']))
+
     def test_braking_ignores_requested_course(self):
         self.assertEqual(predict_ground_motion(2, 90, 0, 0, execution(90, 4), 1),
                          predict_ground_motion(2, 90, 0, 270, execution(90, 4), 1))
@@ -294,6 +303,212 @@ class NavigationTests(unittest.TestCase):
             knots = build_payload(obs)
             self.assertEqual(knots["state"]["units"]["speed"], "knots")
             self.assertEqual(list(mps["questions"]["action"]["criteria"]), list(knots["questions"]["action"]["criteria"]))
+
+
+class FollowingTests(unittest.TestCase):
+    def test_compact_candidate_units_and_warning_schema(self):
+        task, records = self.wire()
+        self.assertNotIn('arrival_radius_m', task['unity_only'])
+        adapter = UnitySnapshotAdapter('mps'); adapter.add_task(task, TASK)
+        for record in records: adapter.add_situation(record)
+        obs = adapter.ready()[0][1]['observation']; before = copy.deepcopy(obs)
+        mps = build_payload(obs)
+        self.assertEqual(obs, before)
+        self.assertNotIn('distance_to_ceiling_m', mps['state']['braking'])
+        self.assertNotIn('speed_transition_time_s', mps['state']['execution'])
+        obs['model_speed_unit'] = 'knots'
+        knots = build_payload(obs)
+        self.assertEqual(list(knots['questions']['action']['criteria']), list(ACTION_CHOICES))
+        for name in ACTION_CHOICES:
+            a = json.loads(mps['questions']['action']['criteria'][name])
+            b = json.loads(knots['questions']['action']['criteria'][name])
+            self.assertEqual(a['range_m'], b['range_m'])
+            self.assertEqual(a['warnings'], b['warnings'])
+            self.assertAlmostEqual(a['speed_mps']/KNOT_MPS, b['speed_knots'], delta=.000501)
+            self.assertAlmostEqual(a['end_motion']['speed_mps']/KNOT_MPS, b['end_motion']['speed_knots'], delta=.000501)
+            for warning in b['warnings']:
+                self.assertIn(warning, knots['state']['warning_meanings'])
+
+    def wire(self):
+        base = observation()
+        task = dict(simId="episode", id="run", code="targetFollowing",
+                    params=dict(platCode=1001, targetPlatformId=3001, minFollowingDistanceM=100, maxFollowingDistanceM=200),
+                    unity_only=dict(decision_id="decision", tick=0, situation_timestamp=123,
+                                    collision_radii_m={"1001": 6.044, "3001": 6, "2001": 3},
+                                    max_speed_knots=50, action_duration_s=1,
+                                    stop_speed_knots=.1/KNOT_MPS, execution=execution(0)))
+        task["unity_only"]["execution"]["obstacle_avoidance_radii_m"] = {"2001": 50}
+        records = [dict(base["boat"], platformId=1001, timestamp=123, targetSpeed=10, targetCourse=0)]
+        for platform, x, y in [(3001, 0, 150), (2001, 250, 100)]:
+            lon, lat = geo(x, y)
+            records.append(dict(platformId=platform, timestamp=123, longitude=lon, latitude=lat,
+                                targetSpeed=10 if platform == 3001 else 0, targetCourse=0 if platform == 3001 else None))
+        return task, records
+
+    def test_target_manifest_role_and_missing_current_target(self):
+        task, records = self.wire()
+        adapter = UnitySnapshotAdapter("mps")
+        adapter.add_task(task, TASK)
+        for record in (records[0], records[2]): adapter.add_situation(record)
+        self.assertEqual(adapter.ready(), [])
+        adapter.add_situation(dict(records[1], timestamp=122))
+        self.assertEqual(adapter.ready(), [])
+        adapter.add_situation(records[1])
+        _, request, error = adapter.ready()[0]
+        self.assertIsNone(error)
+        self.assertTrue(valid_request(request))
+        obs = request["observation"]
+        self.assertNotIn("planWaypointList", obs["task"])
+        self.assertEqual(obs["target"]["platformId"], 3001)
+        self.assertEqual([o["platformId"] for o in obs["obstacles"]], [2001])
+        payload = build_payload(obs)
+        self.assertEqual(len(payload["questions"]["action"]["criteria"]), 64)
+        self.assertAlmostEqual(payload["state"]["relative"]["distance_m"], 150)
+        self.assertAlmostEqual(payload["state"]["relative"]["range_rate_mps"], 0)
+        facts = json.loads(payload["questions"]["action"]["criteria"]["speed_3__north"])
+        self.assertEqual(facts["range_m"][0], 150)
+        self.assertEqual(facts["reference_error_m"], [0, 0])
+        self.assertNotIn("rear_reference", payload["state"])
+        self.assertEqual(payload["state"]["task"]["guidance"], "line_of_sight_distance")
+        self.assertNotIn("segments", json.dumps(payload))
+
+    def test_motion_sweep_detects_crossing_between_samples(self):
+        motion = {"path": [[0, 0], [20, 0]], "sample_dt_s": 1}
+        minimum, maximum, end = moving_range(motion, [10, 0], [0, 0], 1)
+        self.assertEqual(minimum, 0)
+        self.assertEqual(maximum, 10)
+        self.assertEqual(end, [-10, 0])
+        # Both boats moving equally: range must remain constant, not shrink by own travel.
+        self.assertEqual(moving_range(motion, [100, 0], [20, 0], 1)[:2], (100, 100))
+        short_final_step = {"path": [[0, 0], [1, 0], [1.5, 0]], "sample_dt_s": 1}
+        self.assertEqual(moving_range(short_final_step, [10, 0], [1, 0], 1.5)[:2], (10, 10))
+        ahead = relative_facts([-100, 0], [0, 0], [1, 0], [1, 0])
+        self.assertEqual(ahead["along_behind_m"], -100)
+
+    def test_following_stop_units_and_stationary_heading(self):
+        task, records = self.wire()
+        adapter = UnitySnapshotAdapter()
+        adapter.add_task(task, TASK)
+        for record in records: adapter.add_situation(record)
+        obs = adapter.ready()[0][1]["observation"]
+        obs["obstacles"] = []
+        payload = build_payload(obs)
+        self.assertEqual(payload["state"]["units"]["speed"], "knots")
+        self.assertAlmostEqual(payload["state"]["target"]["actual_speed_knots"], 10)
+        # STOP inherits following config but consumes a new complete snapshot.
+        stop = copy.deepcopy(task); stop.pop("params")
+        stop["unity_only"].update(decision_id="stop", tick=50, situation_timestamp=124)
+        adapter.add_task(stop, STOP)
+        for record in records:
+            changed = dict(record, timestamp=124)
+            if record["platformId"] == 3001: changed.update(targetSpeed=0, targetCourse=None)
+            adapter.add_situation(changed)
+        _, request, error = adapter.ready()[0]
+        self.assertIsNone(error)
+        self.assertTrue(valid_request(request))
+        self.assertEqual(request["observation"]["task"]["reference_course_deg"], 0)
+        result = build_payload(request["observation"])
+        self.assertIn("IMMEDIATE STOP", result["questions"]["action"]["instructions"])
+        self.assertEqual(result["state"]["task"]["mode"], "immediate_stop")
+        self.assertNotIn("rear_reference", result["state"])
+        self.assertNotIn("line_reference", result["state"])
+        self.assertNotIn("recover/maintain", result["questions"]["action"]["instructions"])
+        self.assertIn("NONZERO_NOT_STOP", json.loads(result["questions"]["action"]["criteria"]["speed_3__north"])["warnings"])
+        self.assertIn("target", result["state"])
+        self.assertEqual(len(result["questions"]["action"]["criteria"]), 64)
+
+    def test_invalid_following_constraints_rejected(self):
+        for field, value in [("minFollowingDistanceM", float("nan")), ("maxFollowingDistanceM", 50),
+                             ("targetPlatformId", 1001), ("targetPlatformId", 9999), ("minFollowingDistanceM", 10)]:
+            task, _ = self.wire(); task["params"][field] = value
+            with self.assertRaises(ValueError): UnitySnapshotAdapter().add_task(task, TASK)
+
+    def test_initial_minimum_violation_is_recovery_not_new_collision(self):
+        task, records = self.wire()
+        records[1]["longitude"], records[1]["latitude"] = geo(0, 70)
+        adapter = UnitySnapshotAdapter("mps"); adapter.add_task(task, TASK)
+        for record in records: adapter.add_situation(record)
+        obs = adapter.ready()[0][1]["observation"]; obs["obstacles"] = []
+        payload = build_payload(obs); question = payload["questions"]["action"]
+        self.assertIn("CURRENTLY TOO CLOSE", question["instructions"])
+        self.assertIn("SEPARATION_UNCHANGED", json.loads(question["criteria"]["speed_3__north"])["warnings"])
+        self.assertIn("SEPARATION_INCREASING", json.loads(question["criteria"]["speed_0__north"])["warnings"])
+
+    def test_collinear_away_recovery_includes_angular_progress(self):
+        task, records = self.wire()
+        task["unity_only"]["execution"] = execution(180)
+        task["unity_only"]["execution"]["obstacle_avoidance_radii_m"] = {"2001": 50}
+        records[0].update(targetSpeed=25, targetCourse=180)
+        records[1]["longitude"], records[1]["latitude"] = geo(0, 300)
+        adapter = UnitySnapshotAdapter("mps"); adapter.add_task(task, TASK)
+        for record in records: adapter.add_situation(record)
+        obs = adapter.ready()[0][1]["observation"]; obs["obstacles"] = []
+        payload = build_payload(obs)
+        self.assertEqual(payload["state"]["range_recovery"]["phase"], "reorient_before_catchup")
+        self.assertEqual(payload["state"]["range_recovery"]["signed_heading_error_deg"], -180)
+        self.assertTrue(payload["state"]["range_recovery"]["own_motion_points_away"])
+        criteria = payload["questions"]["action"]["criteria"]
+        self.assertEqual(len(criteria), 64)
+        self.assertIn("COMMAND_POINTS_AWAY", json.loads(criteria["speed_5__south"])["warnings"])
+        self.assertNotIn("COMMAND_POINTS_AWAY", json.loads(criteria["speed_5__north"])["warnings"])
+        self.assertIn("turn_error_deg", json.loads(criteria["speed_5__north"]))
+        self.assertIn("NO_REORIENTATION", json.loads(criteria["speed_0__north"])["warnings"])
+        # Short-action range barely distinguishes a useful turn from going away.
+        forward = predict_ground_motion(25*KNOT_MPS, 180, 25*KNOT_MPS, 180, execution(180), 1)
+        turning = predict_ground_motion(25*KNOT_MPS, 180, 25*KNOT_MPS, 0, execution(180), 1)
+        for motion in (forward, turning): motion["sample_dt_s"] = .02
+        a = moving_range(forward, (0, 300), (0, 10*KNOT_MPS), 1)[2]
+        b = moving_range(turning, (0, 300), (0, 10*KNOT_MPS), 1)[2]
+        self.assertGreater(math.hypot(*b), 300)
+        self.assertLess(abs(math.hypot(*a)-math.hypot(*b)), .01)
+        self.assertLess(abs(course_error(0, turning["end_course_deg"])), abs(course_error(0, forward["end_course_deg"])))
+        # Crossing zero degrees must not invent a full-circle correction.
+        self.assertEqual(course_error(1, 359), 2)
+        self.assertEqual(course_error(359, 1), -2)
+        obs["execution"] = execution(70)
+        obs["boat"]["targetCourse"] = 70
+        self.assertEqual(build_payload(obs)["state"]["range_recovery"]["phase"], "close_range")
+        obs["execution"] = execution(180)
+        obs["boat"]["targetCourse"] = 180
+        # In-band bearing is free; an opposite heading alone must not demand pursuit.
+        obs["target"]["longitude"], obs["target"]["latitude"] = geo(0, 150)
+        moving_payload = build_payload(obs)
+        self.assertEqual(moving_payload["state"]["range_recovery"]["trigger"], "opening_threatens_maximum_before_turn")
+        self.assertIn("PREDICTED LOSS OF MAXIMUM RANGE", moving_payload["questions"]["action"]["instructions"])
+        obs["boat"].update(targetSpeed=0, targetCourse=None)
+        obs["target"].update(targetSpeed=0, targetCourse=None)
+        self.assertNotIn("range_recovery", build_payload(obs)["state"])
+        obs["target"]["longitude"], obs["target"]["latitude"] = geo(0, 300)
+        obs["task"]["mode"] = "immediate_stop"
+        obs["task"]["stop_speed_mps"] = .1
+        self.assertNotIn("range_recovery", build_payload(obs)["state"])
+
+    def test_reference_on_current_line_not_target_heading(self):
+        point = line_reference_facts([180, 240], 150)
+        self.assertEqual((point["east_m"], point["north_m"]), (90, 120))
+        self.assertEqual(point["range_error_m"], 150)
+        self.assertAlmostEqual(point["away_course_deg"], 216.86989764584402)
+        at_range = line_reference_facts([150, 0], 150)
+        self.assertEqual((at_range["east_m"], at_range["north_m"]), (0, 0))
+        self.assertFalse(line_reference_facts([0, 0], 150)["defined"])
+
+    def test_incoming_target_needs_active_escape_not_parking(self):
+        task, records = self.wire()
+        records[0].update(targetSpeed=0, targetCourse=None)
+        records[1].update(longitude=geo(0, 70)[0], latitude=geo(0, 70)[1], targetCourse=180)
+        task["unity_only"]["execution"] = execution(180)
+        task["unity_only"]["execution"]["obstacle_avoidance_radii_m"] = {"2001": 50}
+        adapter = UnitySnapshotAdapter("mps"); adapter.add_task(task, TASK)
+        for record in records: adapter.add_situation(record)
+        obs = adapter.ready()[0][1]["observation"]; obs["obstacles"] = []
+        payload = build_payload(obs); question = payload["questions"]["action"]
+        self.assertTrue(payload["state"]["relative"]["target_approaching_own_position"])
+        self.assertAlmostEqual(payload["state"]["relative"]["range_rate_mps"], -10*KNOT_MPS)
+        self.assertEqual(payload["state"]["line_reference"]["away_course_deg"], 180)
+        self.assertIn("actively MOVE AWAY", question["instructions"])
+        self.assertIn("TARGET_COLLISION", json.loads(question["criteria"]["speed_0__south"])["warnings"])
+        self.assertNotIn("TARGET_COLLISION", json.loads(question["criteria"]["speed_4__south"])["warnings"])
+        self.assertEqual(len(question["criteria"]), 64)
 
 
 if __name__ == "__main__":

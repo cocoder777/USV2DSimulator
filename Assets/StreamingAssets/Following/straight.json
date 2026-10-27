@@ -1,0 +1,26 @@
+{
+  "scenario_id": "following_straight",
+  "duration_s": 60,
+  "initial_state": {
+    "x": 0,
+    "y": 0,
+    "heading_deg": 90,
+    "speed": 5.1444444,
+    "yaw_rate_deg": 0
+  },
+  "target": {
+    "x": 0,
+    "y": 150,
+    "course_deg": 0,
+    "speed_knots": 10,
+    "radius_m": 6
+  },
+  "segments": [
+    {
+      "start_s": 0,
+      "speed_knots": 10,
+      "yaw_rate_deg_s": 0
+    }
+  ],
+  "obstacles": []
+}

@@ -10,6 +10,8 @@ from matplotlib.patches import Circle
 
 
 def plot_run(document, output):
+    if document.get("task_mode") == "targetFollowing":
+        return plot_following(document, output)
     route = document["route"]
     points = route["waypoints"]
     reference = (route.get("path") or {}).get("samples") or points
@@ -68,6 +70,39 @@ def plot_run(document, output):
                  ha="right", va="bottom", fontsize=8, color="0.35")
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=180, facecolor="white")
+    finally:
+        plt.close(fig)
+
+
+def plot_following(document, output):
+    samples = document["samples"]
+    metrics = document["following_metrics"]
+    if not samples or any(s.get("target") is None for s in samples):
+        raise ValueError("Following run has no target samples")
+    fig, (ax, ranges) = plt.subplots(1, 2, figsize=(13, 5), layout="constrained")
+    try:
+        ax.plot([s["x"] for s in samples], [s["y"] for s in samples], label="Own boat", color="#0072BD")
+        ax.plot([s["target"]["x"] for s in samples], [s["target"]["y"] for s in samples], label="Observed target", color="magenta")
+        last = samples[-1]["target"]
+        for radius, color, label in [(metrics["min_distance_m"], "red", "Minimum range"),
+                                      (metrics["max_distance_m"], "green", "Maximum range")]:
+            ax.add_patch(Circle((last["x"], last["y"]), radius, fill=False, edgecolor=color, alpha=.5, label=label))
+        for obstacle in samples[-1].get("obstacles") or []:
+            ax.add_patch(Circle((obstacle["x"], obstacle["y"]), obstacle["radius_m"], color="red", alpha=.5))
+            ax.add_patch(Circle((obstacle["x"], obstacle["y"]), obstacle["avoidance_radius_m"], fill=False, edgecolor="orange"))
+        ax.set_aspect("equal", adjustable="datalim"); ax.set_xlabel("East (m)"); ax.set_ylabel("North (m)")
+        ax.set_title("Target following: observed trajectories"); ax.legend()
+        times = [s["simulation_time"] for s in samples]
+        ranges.axhspan(metrics["min_distance_m"], metrics["max_distance_m"], color="green", alpha=.12, label="Allowed range")
+        ranges.plot(times, [s["target"]["distance_m"] for s in samples], label="Centre range (m)")
+        ranges.plot(times, [s["target"]["along_behind_m"] for s in samples], label="Along behind (m)", alpha=.65)
+        ranges.plot(times, [s["target"]["cross_track_m"] for s in samples], label="Lateral offset (m)", alpha=.65)
+        ranges.set_xlabel("Simulation time (s)"); ranges.set_ylabel("Metres"); ranges.legend()
+        rear_label = "legacy rear diagnostic" if metrics.get("guidance") == "line_of_sight_distance" else "rear following"
+        ranges.set_title(f"{document['result']} | in band {metrics['in_band_fraction']:.1%} | {rear_label} {metrics['following_fraction']:.1%}")
+        for axis in (ax, ranges): axis.grid(True, alpha=.25)
+        output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output, dpi=180, facecolor="white")
     finally:
         plt.close(fig)

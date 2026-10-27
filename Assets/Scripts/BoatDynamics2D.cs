@@ -34,9 +34,15 @@ public class BoatDynamics2D : MonoBehaviour
     private float accelerationCommand, angularAccelerationCommand, actualAcceleration, actualAngularAcceleration;
     public Vector2 Position => position;
     public float Speed => speed;
-    public float HeadingDeg => Mathf.Repeat(headingRad * Mathf.Rad2Deg, 360f);
+    // Mathf.Repeat can round tiny negative angles up to 360 in float precision.
+    public static float NormalizeDegrees(float value)
+    {
+        float result = Mathf.Repeat(value, 360f);
+        return result >= 360f ? 0f : result;
+    }
+    public float HeadingDeg => NormalizeDegrees(headingRad * Mathf.Rad2Deg);
     public float YawRateDeg => yawRate * Mathf.Rad2Deg;
-    public float NavigationTargetCourseDeg => Mathf.Repeat(90f - navigationHeadingTarget, 360f);
+    public float NavigationTargetCourseDeg => NormalizeDegrees(90f - navigationHeadingTarget);
     public float NavigationCourseErrorDeg => -(navigationHeadingTarget - headingRad * Mathf.Rad2Deg);
     public float AccelerationCommandValue => accelerationCommand;
     public float ActualAccelerationValue => actualAcceleration;

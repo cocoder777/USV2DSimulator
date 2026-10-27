@@ -57,6 +57,7 @@ public sealed class TargetRouteDisplay : MonoBehaviour
     public bool LoadRoute()
     {
         LoadError = null;
+        if (mission != null && mission.IsFollowing) { ClearVisuals(); return true; }
         try
         {
             if (mission == null) mission = FindAnyObjectByType<MissionManager>();

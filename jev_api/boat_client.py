@@ -119,6 +119,16 @@ def valid_request(packet):
             )
         if task.get("mode") == "immediate_stop":
             return False
+        if task.get("mode") == "target_following":
+            target = obs["target"]
+            return (all(finite(target[k]) for k in ("longitude", "latitude", "targetSpeed", "radius_m"))
+                    and -180 <= target["longitude"] <= 180 and -90 <= target["latitude"] <= 90
+                    and 0 <= target["targetSpeed"] <= 200 and target["radius_m"] > 0
+                    and (target["targetCourse"] is None and target["targetSpeed"] == 0
+                         or finite(target["targetCourse"]) and 0 <= target["targetCourse"] < 360)
+                    and all(finite(task[k]) for k in ("minFollowingDistanceM", "maxFollowingDistanceM", "reference_course_deg"))
+                    and target["radius_m"] + hull < task["minFollowingDistanceM"] < task["maxFollowingDistanceM"]
+                    and 0 <= task["reference_course_deg"] < 360)
         if type(task["planWaypointNum"]) is not int or task["planWaypointNum"] != len(
             task["planWaypointList"]
         ):
@@ -207,7 +217,8 @@ def serve(settings):
     def send_status(sock, task, status, description, result=None, control_stamp=None):
         key = task["simId"], task["id"]
         context = task.get("params", adapter.tasks.get(key, {}))
-        params = {"currentRoute": context.get("currentRoute", 0) if isinstance(context, dict) else 0}
+        params = ({"targetPlatformId": context.get("targetPlatformId")} if task.get("code") == "targetFollowing"
+                  else {"currentRoute": context.get("currentRoute", 0) if isinstance(context, dict) else 0})
         local = task.get("unity_only", {})
         if local.get("decision_id"):
             params["unity_only"] = {k: local[k] for k in ("decision_id", "tick")}

@@ -27,6 +27,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
         public float x, y, speed, heading_deg, yaw_rate_deg_s, acceleration_mps2, angular_acceleration_deg_s2;
         public string mode;
         public JArray obstacles { get; set; }
+        public JObject target { get; set; }
     }
 
     private sealed class PlotJob
@@ -42,6 +43,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
     private MissionManager mission;
     private SimulationRunner runner;
     private TargetRouteData recordedRoute;
+    private FollowingScenarioData recordedFollowing;
     private string episode;
     private bool exported;
     private int exportSerial;
@@ -72,7 +74,8 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
         exported = false;
         episode = boat.EpisodeId;
         recordedRoute = mission.Route;
-        if (recordedRoute != null) AddSample();
+        recordedFollowing = mission.IsFollowing ? mission.Following.Scenario : null;
+        if (mission.HasTask) AddSample();
     }
 
     private void AddSample()
@@ -81,15 +84,16 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
             x = boat.Position.x, y = boat.Position.y, speed = boat.Speed, mode = boat.Mode.ToString(),
             heading_deg = boat.HeadingDeg, yaw_rate_deg_s = boat.YawRateDeg,
             acceleration_mps2 = boat.ActualAccelerationValue, angular_acceleration_deg_s2 = boat.ActualAngularAccelerationDeg,
-            obstacles = boat.GetComponent<DynamicObstacleField>()?.Snapshot() });
+            obstacles = boat.GetComponent<DynamicObstacleField>()?.Snapshot(),
+            target = mission.IsFollowing ? mission.Following.Snapshot() : null });
     }
 
     private void RecordStep()
     {
         if (recordedRoute != mission.Route || episode != boat.EpisodeId) BeginEpisode();
-        if (recordedRoute == null || exported) return;
+        if (!mission.HasTask || exported) return;
         AddSample();
-        if (mission.Failed || mission.Progress.Completed) ExportCompletedRun();
+        if (mission.Failed || runner.State == SimulationRunner.RunState.Completed || runner.State == SimulationRunner.RunState.Stopped) ExportCompletedRun();
     }
 
     private void ExportCompletedRun()
@@ -106,14 +110,18 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
             Directory.CreateDirectory(directory);
             string name = "trajectory_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff") + "Z_" + episode;
             string data = Path.Combine(directory, name + ".json");
-            var document = new { schema_version = 1, result = mission.Failed ? "failed" : "completed",
+            var document = new { schema_version = 1, result = mission.Failed ? "failed" : runner.State == SimulationRunner.RunState.Stopped ? "stopped" : "completed",
                 failure_reason = mission.FailureReason, boat_radius_m = boat.CollisionRadius, episode_id = episode,
                 map_level = RecordedMapLevel(), parameters = BoatParameters.Capture(boat), action_duration_s = runner.actionDuration,
                 minimum_physical_clearance_m = GetComponent<DynamicObstacleField>()?.MinimumPhysicalClearance,
                 minimum_avoidance_clearance_m = GetComponent<DynamicObstacleField>()?.MinimumAvoidanceClearance,
-                route = recordedRoute, samples, simulation_time = boat.SimulationTime,
-                final_speed_mps = boat.Speed, passed_count = mission.Progress.NextIndex,
-                passing_max_speeds_mps = mission.Progress.PassingMaxSpeeds };
+                minimum_target_obstacle_clearance_m = GetComponent<DynamicObstacleField>()?.MinimumTargetPhysicalClearance,
+                minimum_target_obstacle_safety_clearance_m = GetComponent<DynamicObstacleField>()?.MinimumTargetSafetyClearance,
+                route = recordedRoute, task_mode = mission.TaskCode, following_scenario = recordedFollowing,
+                following_metrics = mission.IsFollowing ? mission.Following.Metrics() : null,
+                samples, simulation_time = boat.SimulationTime,
+                final_speed_mps = boat.Speed, passed_count = mission.Progress?.NextIndex,
+                passing_max_speeds_mps = mission.Progress?.PassingMaxSpeeds };
             File.WriteAllText(data, JsonConvert.SerializeObject(document, Formatting.Indented));
             LastDataPath = data;
             UnityEngine.Debug.Log("Trajectory data saved: " + data, this);
@@ -128,6 +136,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
 
     private int? RecordedMapLevel()
     {
+        if (recordedRoute == null) return null;
         if (recordedRoute.route_id == "usv_fixed_curve_001") return 0;
         for (int level = 1; level <= MissionManager.MaxMapLevel; level++)
             if (recordedRoute.route_id == "usv_map_level_" + level) return level;

@@ -134,6 +134,8 @@ class UnitySnapshotAdapter:
         self.current = None
         self.seen = set()
         self.last_tick = -1
+        self.following_course = None
+        self.following_stationary = False
 
     def add_situation(self, record):
         key = record["timestamp"], record["platformId"]
@@ -154,8 +156,8 @@ class UnitySnapshotAdapter:
             raise ValueError("Invalid sampling tick")
         if not all(isinstance(task.get(k), str) and task[k] for k in ("simId", "id", "code")):
             raise ValueError("Missing task identity")
-        if task["code"] != "trackingMode":
-            raise ValueError("Expected trackingMode")
+        if task["code"] not in ("trackingMode", "targetFollowing"):
+            raise ValueError("Expected trackingMode or targetFollowing")
         key = (task["simId"], task["id"])
         if key in self.retired:
             raise ValueError("Retired Unity task")
@@ -169,7 +171,16 @@ class UnitySnapshotAdapter:
                 raise ValueError("Stop has no active task context")
             task = dict(task, params=self.tasks[key])
         params = task["params"]
-        if (type(params.get("platCode")) is not int or not 0 <= params["platCode"] <= 65535
+        if type(params.get("platCode")) is not int or not 0 <= params["platCode"] <= 65535:
+            raise ValueError("Invalid own platform")
+        if task["code"] == "targetFollowing":
+            lower, upper = params.get("minFollowingDistanceM"), params.get("maxFollowingDistanceM")
+            if (type(params.get("targetPlatformId")) is not int or not 0 <= params["targetPlatformId"] <= 65535
+                    or params["targetPlatformId"] == params["platCode"]
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in (lower, upper))
+                    or not 0 < lower < upper):
+                raise ValueError("Invalid target following task")
+        elif (type(params.get("platCode")) is not int or not 0 <= params["platCode"] <= 65535
                 or type(params.get("planWaypointNum")) is not int
                 or not isinstance(params.get("planWaypointList"), list)
                 or not params["planWaypointList"]
@@ -187,6 +198,10 @@ class UnitySnapshotAdapter:
                 or any(type(r) not in (int, float) or not math.isfinite(r) or r <= 0 for r in radii.values())
                 or params["platCode"] not in expected):
             raise ValueError("Invalid snapshot entities/radii")
+        if task["code"] == "targetFollowing":
+            target_id = params["targetPlatformId"]
+            if target_id not in expected or params["minFollowingDistanceM"] <= radii[str(target_id)] + radii[str(params["platCode"])]:
+                raise ValueError("Missing target or following minimum inside combined hulls")
         stamp = local["situation_timestamp"]
         if type(stamp) is not int or not 0 <= stamp <= 0xFFFFFFFF:
             raise ValueError("Invalid situation timestamp")
@@ -197,6 +212,8 @@ class UnitySnapshotAdapter:
             self.waiting.clear()
             self.current = key
             self.seen.clear()
+            self.following_course = None
+            self.following_stationary = False
         self.last_tick = local["tick"]
         self.seen.add(local["decision_id"])
         self.tasks[key] = params
@@ -248,9 +265,7 @@ class UnitySnapshotAdapter:
         boat = dict(boat, collision_radius_m=local["collision_radii_m"][str(boat["platformId"])])
         if abs(boat["targetSpeed"]) < 1e-6:
             boat["targetCourse"] = None
-        points = copy.deepcopy(params["planWaypointList"])
-        for point in points:
-            point["routeSpeed"] *= KNOT_MPS
+        following = task["code"] == "targetFollowing"
         maximum = local["max_speed_knots"]
         if type(maximum) not in (int, float) or not math.isfinite(maximum) or maximum <= 0:
             raise ValueError("Invalid candidate speed limit")
@@ -258,15 +273,34 @@ class UnitySnapshotAdapter:
                    planning=dict(action_duration_s=local["action_duration_s"], simulation_paused_while_deciding=True),
                    execution=local["execution"],
                    action_space=dict(speeds_knots=[maximum * f for f in (0, .05, .1, .2, .35, .5, .75, 1)],
-                                     courses_deg=list(range(0, 360, 45))), model_speed_unit=self.speed_unit,
-                   task=dict(params, planWaypointList=points, routeSpeed_unit="m/s",
-                             next_waypoint_index=params["currentRoute"],
-                             arrival_radius_m=local["arrival_radius_m"],
-                             stop_speed_mps=local["stop_speed_knots"] * KNOT_MPS))
+                                     courses_deg=list(range(0, 360, 45))), model_speed_unit=self.speed_unit)
+        if following:
+            from tools.waypoint_geometry import xy
+            target = next(r for r in task["situation"] if r["platformId"] == params["targetPlatformId"])
+            speed, course = target["targetSpeed"], target["targetCourse"]
+            if speed is None or speed < 0 or (speed > 1e-5 and course is None):
+                raise ValueError("Unknown or unsupported target motion")
+            speed_mps = speed * KNOT_MPS
+            self.following_stationary = speed_mps < (0.2 if self.following_stationary else 0.1)
+            if not self.following_stationary and course is not None:
+                self.following_course = course
+            if self.following_course is None:
+                delta = xy((target["longitude"], target["latitude"]), (boat["longitude"], boat["latitude"]))
+                self.following_course = math.degrees(math.atan2(delta[0], delta[1])) % 360
+            obs["target"] = dict(target, radius_m=local["collision_radii_m"][str(params["targetPlatformId"])])
+            obs["task"] = dict(params, mode="target_following", reference_course_deg=self.following_course,
+                               target_stationary=self.following_stationary)
+        else:
+            points = copy.deepcopy(params["planWaypointList"])
+            for point in points:
+                point["routeSpeed"] *= KNOT_MPS
+            obs["task"] = dict(params, planWaypointList=points, routeSpeed_unit="m/s",
+                               next_waypoint_index=params["currentRoute"], arrival_radius_m=local["arrival_radius_m"],
+                               stop_speed_mps=local["stop_speed_knots"] * KNOT_MPS)
         if kind == STOP:
-            obs["task"] = dict(mode="immediate_stop", stop_speed_mps=local["stop_speed_knots"] * KNOT_MPS)
+            obs["task"] = dict(obs["task"], mode="immediate_stop", stop_speed_mps=local["stop_speed_knots"] * KNOT_MPS)
         for record in task["situation"]:
-            if record["platformId"] != params["platCode"]:
+            if record["platformId"] != params["platCode"] and not (following and record["platformId"] == params["targetPlatformId"]):
                 obs["obstacles"].append(dict(record, id=str(record["platformId"]),
                     radius_m=local["collision_radii_m"][str(record["platformId"])],
                     avoidance_radius_m=local["execution"]["obstacle_avoidance_radii_m"][str(record["platformId"])]))

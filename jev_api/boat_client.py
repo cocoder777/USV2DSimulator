@@ -12,7 +12,7 @@ from protocol.unity_snapshot import UnitySnapshotAdapter
 from protocol.status import status_content
 from validation import valid_request
 
-API_KEY = "apikey_22485fa78919f3a446da960b347c7a0275b4_0f3093e5fd9ea561ec8e253d3cfb2258c39060afba61a9fc49db198f8e9a5bf7"
+API_KEY = "apikey_2225946e8e58ab1f4c55a65656658d4367d5_28522454baf5c1e40593ab21a638fe398bad8aa3300850b67d32eeb3ea7bbd4a"
 
 
 def dumps(value):
@@ -74,7 +74,8 @@ def serve(settings):
     last_control_stamp = 0
 
     def send_status(sock, task, status, description, result=None, control_stamp=None):
-        content = status_content(task, status, description, adapter.tasks, result, control_stamp)
+        observation = adapter.last_observations.get((task['simId'], task['id'])) if status == 1 else None
+        content = status_content(task, status, description, adapter.tasks, result, control_stamp, observation)
         for data in json_packets(content, STATUS):
             sock.sendto(data, endpoint)
 

@@ -117,6 +117,18 @@ Python 内部 `observation.task.code="targetFollowing"` 保留原任务类型，
 
 未来目标脚本、整段轨迹及场景时长不进入决策请求。进入距离区间持续执行，超距记录并尝试恢复；Unity 到达实验时长后结束，不保证跟随合格或零速。状态 params.targetPlatformId 标记目标，不伪造 currentRoute。STOP 从已接收任务恢复配置并用当前完整快照，采用独立停车题目，暂停距离跟随与主动远离目标；即使制动期间超过场景时长，也继续到实际停稳后发 stop_completed，导出 stopped。实体碰撞仍优先于同一步结束判定。
 
+## 友方伴随（甲方5.3）
+
+`code="accompanyMode"`，正式params为`platCode/targetPlatCode/offsetAlongMinM/offsetAlongMaxM/offsetAcrossMinM/offsetAcrossMaxM/syncHeading/maxSpeed`，不带航点和currentRoute。纵向正为前方、横向正为右舷，两轴均要求有限且min≤max；首版要求整个允许矩形避开两艇实体包络。maxSpeed为节，0表示不附加任务限速；Python按任务/物理上限的较小值生成原八档比例速度及八绝对航向，不强制瞬间改变实际航速。
+
+当前伴随仅包含本艇和指定友方目标，不启用普通障碍物；友方目标sign=2，仍通过targetPlatCode而非sign选择。目标按同一0x0060提供当前经纬度、实际速度和运动方向并参与快照屏障，运动方向暂作目标艏向。Unity额外提供`unity_only.target_reference_course_deg`，为本轮目标参考方向，静止时直接用于体坐标轴；它不重复位置/速度，也不包含未来路线或转向命令。运动方向有效时以正式态势方向为准，无效的静止方向直接取该扩展，不做推断或历史补帧。
+
+Python内部task.code仍为accompanyMode，operation表示execute/stop；接收参数即按syncHeading选择position_only/heading_sync请求。当前伴随决策恢复初版：只提供单动作末端位置带误差和纵横相对速度，没有位置改善量、显式阶段字段、制动估计或额外警告码。同步分支再提供航向误差及独立同步提示词；暂不增加长预览、复杂恢复阶段或候选碰撞预测。Unity保留两艇实体碰撞检查。不排序、过滤或代选64候选，目标未来运动脚本不进模型。
+
+0x0664.params使用甲方5.3的targetPlatCode、currentAlongM/currentAcrossM、alongOutM/acrossOutM、inPosition、targetSpeed和targetCourse，不伪造currentRoute。处理/控制回包的明细来自本次观测；场景结束通知可带Unity实际末态明细。inPosition=1仍持续状态1。仿真实验达到场景时长后由Unity通知结束并回状态2，这只是实验结束，不是稳定伴随验收；STOP使用当前完整采样并暂停位置/航向目标，直到实际停稳再通知结束。实验初始位置在允许带外，方向、速度和位置带可调；八档速度/航向的离散精度会限制精确保持。
+
+当前初版不估计目标转速，友艇按当前方向匀速直线预测；没有恢复方位、转弯专门分支或独立静止对齐阶段。同步分支先进入并稳定保位，再对齐艏向。初始静止直接给参考方向，零速不能原地转艏。转弯和静止同步仍有已知不足。
+
 ## 控制与状态关联
 
 0x0662总长20字节，体 `>IHH`，PlatCode:uint32 / Speed:uint16 / Course:uint16，后两项均0.01精度（节、度）。Unity执行量化解码控制，最大速度校验容纳半个量化步长；不以JSON未量化值替代。
@@ -141,7 +153,7 @@ Unity障碍物沿正弦轨迹运动，每物理步使用相对扫掠判碰，碰
 
 ## 实现和验证
 
-ClientProtocol.cs与protocol/frames.py负责编解码/分片；ObservationBuilder生成任务和实体；BoatUdpBridge与boat_client负责收发；protocol/unity_snapshot.py的UnitySnapshotAdapter负责完整快照屏障及公共观测组装，tasks/负责各任务参数、业务适配、请求构造与状态参数，protocol/status.py封装公共状态关联；geometry/负责共享数值计算，SimulationRunner负责暂停和动作关联。tasks/registry.py统一注册trackingMode与targetFollowing，航线实现位于tasks/task1_waypoint.py；followMode与accompanyMode尚未实现。主项目不导入guoliang目录，通信不设version字段。
+ClientProtocol.cs与protocol/frames.py负责编解码/分片；ObservationBuilder生成任务和实体；BoatUdpBridge与boat_client负责收发；protocol/unity_snapshot.py的UnitySnapshotAdapter负责完整快照屏障及公共观测组装，tasks/负责各任务参数、业务适配、请求构造与状态参数，protocol/status.py封装公共状态关联；geometry/负责共享数值计算，SimulationRunner负责暂停和动作关联。tasks/registry.py统一注册trackingMode、targetFollowing与accompanyMode，航线位于tasks/task1_waypoint.py、伴随位于tasks/task3_accompany.py；followMode尚未实现。主项目不导入guoliang目录，通信不设version字段。
 
 离线测试：
 

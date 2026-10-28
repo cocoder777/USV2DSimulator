@@ -10,6 +10,8 @@ from matplotlib.patches import Circle
 
 
 def plot_run(document, output):
+    if document.get("task_mode") == "accompanyMode":
+        return plot_accompany(document, output)
     if document.get("task_mode") == "targetFollowing":
         return plot_following(document, output)
     route = document["route"]
@@ -71,6 +73,37 @@ def plot_run(document, output):
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output, dpi=180, facecolor="white")
+    finally:
+        plt.close(fig)
+
+
+def plot_accompany(document, output):
+    samples = document['samples']
+    params = document['accompany_metrics']['parameters']
+    times = [s['simulation_time'] for s in samples]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), layout='constrained')
+    try:
+        world, along, across, motion = axes.flat
+        world.plot([s['x'] for s in samples], [s['y'] for s in samples], label='Own boat')
+        world.plot([s['target']['x'] for s in samples], [s['target']['y'] for s in samples], label='Friendly target', color='green')
+        world.set_aspect('equal', adjustable='datalim'); world.set_title('Observed trajectories'); world.legend()
+        for ax, key, lo, hi in ((along, 'along_m', 'offsetAlongMinM', 'offsetAlongMaxM'),
+                                (across, 'across_m', 'offsetAcrossMinM', 'offsetAcrossMaxM')):
+            ax.axhspan(params[lo], params[hi], color='cyan', alpha=.2, label='Allowed band')
+            ax.plot(times, [s['target'][key] for s in samples], label=key)
+            ax.set_ylabel('Metres'); ax.set_xlabel('Simulation seconds'); ax.legend()
+        motion.plot(times, [s['target'].get('position_rate_mps', s['target']['relative_speed_mps']) for s in samples], label='Body-frame position rate (m/s)')
+        motion.plot(times, [s['target']['relative_speed_mps'] for s in samples], linestyle=':', alpha=.5, label='World-relative speed (m/s)')
+        if params['syncHeading']:
+            twin = motion.twinx()
+            twin.plot(times, [s['target']['heading_error_deg'] for s in samples], color='orange', alpha=.6)
+            twin.set_ylabel('Heading error (deg)', color='orange')
+        motion.set_xlabel('Simulation seconds'); motion.legend()
+        for ax in axes.flat:
+            ax.grid(True, alpha=.25)
+        fig.suptitle(f"Accompany | syncHeading={params['syncHeading']} | maxSpeed={params['maxSpeed']} knots | {document['result']}")
+        output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=160, facecolor='white')
     finally:
         plt.close(fig)
 

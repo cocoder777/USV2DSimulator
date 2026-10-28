@@ -424,5 +424,5 @@ def adapt_observation(params, local, records, obs, state):
                        stop_speed_mps=local["stop_speed_knots"] * KNOT_MPS)
 
 
-def status_params(context):
+def status_params(context, observation=None):
     return {"currentRoute": context.get("currentRoute", 0) if isinstance(context, dict) else 0}

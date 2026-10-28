@@ -43,6 +43,11 @@ public static class ObservationBuilder
             situation.Add(mission.Following.Observe());
             radii[FollowingTarget.PlatformId.ToString()] = mission.Following.Scenario.target.radius_m;
         }
+        if (mission.IsAccompany)
+        {
+            situation.Add(mission.Accompany.Observe());
+            radii[AccompanyTarget.PlatformId.ToString()] = mission.Accompany.Scenario.target.radius_m;
+        }
         foreach (JObject obstacle in boat.GetComponent<DynamicObstacleField>()?.Observe() ?? new JArray())
         {
             situation.Add(obstacle.DeepClone());
@@ -50,7 +55,7 @@ public static class ObservationBuilder
         }
         foreach (JObject point in waypoints) point["routeSpeed"] = (double)point["routeSpeed"] / DiscreteAction.MetresPerSecondPerKnot;
         var observation = new JObject {
-            ["params"] = mission.IsFollowing ? new JObject { ["platCode"] = ownPlatform,
+            ["params"] = mission.IsAccompany ? mission.Accompany.Parameters() : mission.IsFollowing ? new JObject { ["platCode"] = ownPlatform,
                 ["targetPlatformId"] = FollowingTarget.PlatformId, ["minFollowingDistanceM"] = mission.Following.MinDistance,
                 ["maxFollowingDistanceM"] = mission.Following.MaxDistance } : new JObject {
                 ["platCode"] = ownPlatform, ["planRouteNum"] = mission.MapLevel,
@@ -76,7 +81,8 @@ public static class ObservationBuilder
                     ["hull_length_m"] = boat.lengthMetres, ["hull_beam_m"] = boat.beamMetres,
                     ["obstacle_avoidance_radii_m"] = boat.GetComponent<DynamicObstacleField>()?.AvoidanceRadii() ?? new JObject() } }
         };
-        if (!mission.IsFollowing) observation["unity_only"]["arrival_radius_m"] = route.arrival_radius_m;
+        if (mission.IsAccompany) observation["unity_only"]["target_reference_course_deg"] = mission.Accompany.Course;
+        if (!mission.HasMovingTarget) observation["unity_only"]["arrival_radius_m"] = route.arrival_radius_m;
         return observation;
     }
 

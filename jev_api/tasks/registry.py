@@ -4,11 +4,12 @@
 # target_platform_id, adapt_observation, validate_observation, build_payload and
 # status_params. A build_stop_payload hook is optional for target-specific facts.
 
-from tasks import task1_waypoint, distance_following, stop
+from tasks import task1_waypoint, distance_following, task3_accompany, stop
 
 TASKS = {
     "trackingMode": task1_waypoint,
     "targetFollowing": distance_following,
+    "accompanyMode": task3_accompany,
 }
 
 
@@ -16,7 +17,7 @@ def get_task(code):
     try:
         return TASKS[code]
     except (KeyError, TypeError):
-        raise ValueError("Expected trackingMode or targetFollowing") from None
+        raise ValueError("Unsupported task code") from None
 
 
 def build_payload(observation, model):

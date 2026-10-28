@@ -5,6 +5,7 @@ import time
 from geometry.coordinates import KNOT_MPS
 from protocol.frames import STOP
 from tasks.registry import get_task
+from action_space import SPEED_FRACTIONS
 
 
 class UnitySnapshotAdapter:
@@ -19,6 +20,7 @@ class UnitySnapshotAdapter:
         self.seen = set()
         self.last_tick = -1
         self.task_state = {}
+        self.last_observations = {}
 
     def add_situation(self, record):
         key = record["timestamp"], record["platformId"]
@@ -78,6 +80,7 @@ class UnitySnapshotAdapter:
             self.current = key
             self.seen.clear()
             self.task_state = {}
+            self.last_observations.clear()
         self.last_tick = local["tick"]
         self.seen.add(local["decision_id"])
         self.tasks[key] = params
@@ -94,6 +97,7 @@ class UnitySnapshotAdapter:
         self.waiting.pop(key, None)
         self.tasks.pop(key, None)
         self.retired.add(key)
+        self.last_observations.pop(key, None)
 
     def ready(self):
         result = []
@@ -107,6 +111,7 @@ class UnitySnapshotAdapter:
             if all(r is not None for r in records):
                 try:
                     packet = self.observation(dict(task, situation=records), kind)
+                    self.last_observations[key] = packet['observation']
                     result.append((task, packet, None))
                 except (ValueError, KeyError, TypeError, OverflowError) as error:
                     result.append((task, None, str(error)))
@@ -135,7 +140,7 @@ class UnitySnapshotAdapter:
         obs = dict(boat=boat, obstacles=[],
                    planning=dict(action_duration_s=local["action_duration_s"], simulation_paused_while_deciding=True),
                    execution=local["execution"],
-                   action_space=dict(speeds_knots=[maximum * f for f in (0, .05, .1, .2, .35, .5, .75, 1)],
+                   action_space=dict(speeds_knots=[maximum * f for f in SPEED_FRACTIONS],
                                      courses_deg=list(range(0, 360, 45))), model_speed_unit=self.speed_unit)
         obs["operation"] = "stop" if kind == STOP else "execute"
         task_module.adapt_observation(params, local, task["situation"], obs, self.task_state)

@@ -4,13 +4,13 @@ from tasks.registry import TASKS
 from tasks import task1_waypoint
 
 
-def status_content(task, status, description, contexts, result=None, control_stamp=None):
+def status_content(task, status, description, contexts, result=None, control_stamp=None, observation=None):
     key = task["simId"], task["id"]
     context = task.get("params", contexts.get(key, {}))
     # Rejected unknown codes must still receive the original correlated failure
     # response. This fallback does not admit them to the decision registry.
     task_module = TASKS.get(task["code"], task1_waypoint)
-    params = task_module.status_params(context)
+    params = task_module.status_params(context, observation)
     local = task.get("unity_only", {})
     if local.get("decision_id"):
         params["unity_only"] = {k: local[k] for k in ("decision_id", "tick")}

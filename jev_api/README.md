@@ -1,4 +1,4 @@
-# Jev 航线与目标距离跟随决策客户端
+# Jev 航线、目标距离跟随与友方伴随决策客户端
 
 接收 Unity 模拟的甲方任务及兵力融合态势，请求 Jev 从 64 个离散候选中选择目标航速/航向。Unity 采样后暂停，收到匹配动作后执行指定时长，再次采样；默认 1 s 仿真时间，物理步长 0.02 s。启动及界面操作见[项目 README](../README.md)，完整字段、分片与状态语义见[当前协议](../docs/bian/当前控制与Jev协议.md)。
 
@@ -14,6 +14,7 @@
 | `tasks/registry.py` | 甲方/项目任务编码到任务模块的唯一注册表 |
 | `tasks/task1_waypoint.py` | 航线任务参数、业务适配与校验、提示词、请求构造及进度参数 |
 | `tasks/distance_following.py` | 当前连线距离跟随的参数、业务适配与校验、提示词、请求及状态参数 |
+| `tasks/task3_accompany.py` | 甲方伴随参数、速度上限、两种同步模式的独立请求及状态参数 |
 | `tasks/stop.py` | 公共停车操作分发、停车目标与提示词；保留跟随目标的运动/碰撞事实 |
 | `tasks/presentation.py` | 模型请求共用的位置、障碍净距文字及避障说明 |
 | `geometry/coordinates.py` | 经纬度转固定东/北坐标、公共单位常量 |
@@ -21,6 +22,7 @@
 | `geometry/motion.py` | 与 Unity 同规则的受限加减速和角运动预测，不选择动作 |
 | `geometry/obstacles.py` | 附近障碍物、当前位置快照净距及运动事实 |
 | `geometry/relative_motion.py` | 两艇相对运动、连线参考与联合时刻距离扫掠 |
+| `geometry/accompany.py` | 目标体坐标投影、矩形位置带误差和相对速度 |
 | `tools/model_units.py` | Jev 速度表达单位转换和候选事实字符串序列化，不改变计算与判断 |
 | `tools/http_transport.py` | HTTPS 复用、代理兼容、预连接、计时 |
 
@@ -28,7 +30,21 @@
 
 内部观测以 `observation.task.code` 保留原任务编码，以 `observation.operation="execute"/"stop"` 区分执行和停车。停车不覆盖任务类型，仍读取已接收任务配置及新的完整快照。这两个内部字段不增加或改变甲方报文字段，也不直接加入 HTTP state；模型请求保持各任务原有表达。请求经过公共单位转换和 Choice 字符串序列化后，由 worker 统一调用 HTTP，任务模块不直接发网络请求。
 
-新增任务时，在任务模块提供 `validate_params/validate_manifest/target_platform_id/adapt_observation/validate_observation/build_payload/status_params`，并在 `registry.py` 注册编码。`adapt_observation` 接收独立任务状态字典，重置或切换任务时由快照适配器清空；该状态不能补齐当前态势。需要目标专属停车事实时可提供 `build_stop_payload`，否则使用公共航线停车构造器。未来甲方 5.2 `followMode` 与 5.3 `accompanyMode` 尚未注册；当前 `targetFollowing` 继续表示原连线距离任务。已实现航线使用 `task1_waypoint.py`，后续伴随实现时使用 `task3_accompany.py`。
+新增任务时，在任务模块提供 `validate_params/validate_manifest/target_platform_id/adapt_observation/validate_observation/build_payload/status_params`，并在 `registry.py` 注册编码。`adapt_observation` 接收独立任务状态字典，重置或切换任务时由快照适配器清空；该状态不能补齐当前态势。`status_params(context, observation=None)` 可使用本轮观测生成业务明细，终态可采用Unity通知中的实际统计。需要目标专属停车事实时可提供 `build_stop_payload`，否则使用公共航线停车构造器。甲方 5.2 `followMode` 尚未实现；当前 `targetFollowing` 继续表示原连线距离任务。航线使用 `task1_waypoint.py`，友方伴随使用 `task3_accompany.py`。
+
+## 友方伴随
+
+当前唯一实现已恢复初版，以 `Logs/accompany_retry1` 的原始模型请求为核对依据；不代表已经达到稳定伴随要求。`tasks/task3_accompany.py`负责参数、适配、两种提示词、请求和状态；`geometry/accompany.py`负责体坐标及单动作候选事实。没有额外版本切换。
+
+正式编码 `accompanyMode`，参数为 `platCode/targetPlatCode/offsetAlongMinM/offsetAlongMaxM/offsetAcrossMinM/offsetAcrossMaxM/syncHeading/maxSpeed`。目标前向为纵轴正向、右舷为横轴正向，单位米。本艇和友艇必须同属本轮完整快照；首版不接收普通障碍物，位置带须避开两艇实体包络。运动方向暂作艏向；静止无方向时直接使用 `unity_only.target_reference_course_deg`。
+
+接收参数即区分 `position_only` 与 `heading_sync`。原64候选逐一预测一个动作后的位置、两轴越界量、位置带误差和纵横相对速度。同步分支再提供艏向误差。初版仅通过提示词要求先进入、再保持与对齐，不设置显式任务阶段，没有位置改善量、相对制动估计和额外警告码。
+
+本艇沿用共享受限加减速/转向模型；友艇只按当前速度和方向做匀速直线预测。不读取未来脚本，不估计目标转速，不含恢复方位、转弯专门分支、独立静止对齐阶段或长预览，不本地排序/过滤/代选。
+
+maxSpeed=0使用物理上限，非零取任务/物理上限较小值，再乘原八档比例 `[0,.05,.1,.2,.35,.5,.75,1]`，与八个绝对航向组合成64候选。内部用米及m/s，模型支持节或m/s显示。
+
+0x0664按甲方5.3返回目标编码、currentAlongM/currentAcrossM、alongOutM/acrossOutM、inPosition、targetSpeed（节）及targetCourse。到位仍为状态1；Unity场景结束或实际停车通知后回状态2。STOP保留任务身份，暂停伴随目标，由Jev选停车动作。本次恢复没有再次启动真实模型仿真。
 
 ## 目标距离跟随
 

@@ -159,7 +159,7 @@ public sealed class SimulationRunner : MonoBehaviour
         bridge?.QueuePacket(new JObject {
             ["type"] = type, ["session_id"] = boat.SessionId, ["episode_id"] = boat.EpisodeId,
             ["run_id"] = boat.RunId, ["tick"] = boat.Tick,
-            ["params"] = mission.IsFollowing ? new JObject { ["platCode"] = 1001, ["targetPlatformId"] = FollowingTarget.PlatformId }
+            ["params"] = mission.IsAccompany ? mission.Accompany.StatusParams() : mission.IsFollowing ? new JObject { ["platCode"] = 1001, ["targetPlatformId"] = FollowingTarget.PlatformId }
                 : new JObject { ["platCode"] = 1001, ["currentRoute"] = Math.Max(0, (mission.Progress?.NextIndex ?? 1) - 1) }
         });
     }
@@ -181,6 +181,8 @@ public sealed class SimulationRunner : MonoBehaviour
             collision = mission.Following.Step(dt, previous, boat.Position) ?? collision;
             collision = obstacles.MeasureFollowingTarget(previousTarget, mission.Following.Position) ?? collision;
         }
+        if (mission.IsAccompany)
+            collision = mission.Accompany.Step(dt, previous, boat.Position, StopRequested) ?? collision;
         if (collision != null)
         {
             mission.FailCollision(collision);

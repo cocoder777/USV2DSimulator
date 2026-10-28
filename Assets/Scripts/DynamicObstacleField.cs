@@ -104,6 +104,7 @@ public sealed class DynamicObstacleField : MonoBehaviour
     }
     private void CreateField()
     {
+        if (mission.IsAccompany) return;
         if (mission.IsFollowing)
         {
             if (!mission.Following.ObstaclesEnabled) return;

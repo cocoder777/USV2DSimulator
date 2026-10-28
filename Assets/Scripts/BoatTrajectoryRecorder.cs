@@ -74,7 +74,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
         exported = false;
         episode = boat.EpisodeId;
         recordedRoute = mission.Route;
-        recordedFollowing = mission.IsFollowing ? mission.Following.Scenario : null;
+        recordedFollowing = mission.IsAccompany ? mission.Accompany.Scenario : mission.IsFollowing ? mission.Following.Scenario : null;
         if (mission.HasTask) AddSample();
     }
 
@@ -85,7 +85,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
             heading_deg = boat.HeadingDeg, yaw_rate_deg_s = boat.YawRateDeg,
             acceleration_mps2 = boat.ActualAccelerationValue, angular_acceleration_deg_s2 = boat.ActualAngularAccelerationDeg,
             obstacles = boat.GetComponent<DynamicObstacleField>()?.Snapshot(),
-            target = mission.IsFollowing ? mission.Following.Snapshot() : null });
+            target = mission.IsAccompany ? mission.Accompany.Snapshot() : mission.IsFollowing ? mission.Following.Snapshot() : null });
     }
 
     private void RecordStep()
@@ -119,6 +119,7 @@ public sealed class BoatTrajectoryRecorder : MonoBehaviour
                 minimum_target_obstacle_safety_clearance_m = GetComponent<DynamicObstacleField>()?.MinimumTargetSafetyClearance,
                 route = recordedRoute, task_mode = mission.TaskCode, following_scenario = recordedFollowing,
                 following_metrics = mission.IsFollowing ? mission.Following.Metrics() : null,
+                accompany_metrics = mission.IsAccompany ? mission.Accompany.Metrics() : null,
                 samples, simulation_time = boat.SimulationTime,
                 final_speed_mps = boat.Speed, passed_count = mission.Progress?.NextIndex,
                 passing_max_speeds_mps = mission.Progress?.PassingMaxSpeeds };

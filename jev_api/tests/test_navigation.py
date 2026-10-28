@@ -443,7 +443,7 @@ class FollowingTests(unittest.TestCase):
         self.assertNotIn("operation", decoded["params"])
 
     def test_unimplemented_codes_are_rejected_but_failure_can_be_reported(self):
-        for code in ("followMode", "accompanyMode", "unknown"):
+        for code in ("followMode", "unknown"):
             task, _ = self.wire()
             task["code"] = code
             with self.assertRaises(ValueError):

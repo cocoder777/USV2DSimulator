@@ -9,6 +9,9 @@ public class BoatParameterPanel : MonoBehaviour
     private float simulationSpeed = 1f;
     private float previousTimeScale;
     private string minimumDistance = "100", maximumDistance = "200", followingError;
+    private string alongMin = "-160", alongMax = "-140", acrossMin = "70", acrossMax = "90";
+    private string accompanyMaxSpeed = "0", targetSpeed = "10", referenceCourse = "0", accompanyError;
+    private bool syncHeading = true;
     private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
     private static readonly string[] decisionModes = { "Paused", "Continuous" };
     private static readonly string[] mapDescriptions = {
@@ -86,9 +89,44 @@ public class BoatParameterPanel : MonoBehaviour
         if (mission != null)
         {
             GUILayout.Label("TASK MODE", titleStyle);
-            int taskMode = GUILayout.SelectionGrid((int)mission.Mode, new[] { "Route following", "Distance following" }, 2);
+            int taskMode = GUILayout.SelectionGrid((int)mission.Mode, new[] { "Route", "Distance", "Accompany" }, 3);
             if (taskMode != (int)mission.Mode) mission.SelectTaskMode((MissionManager.TaskMode)taskMode);
-            if (mission.IsFollowing)
+            if (mission.IsAccompany)
+            {
+                var a = mission.Accompany;
+                GUILayout.Label("FRIENDLY ACCOMPANY", titleStyle);
+                int scenario = GUILayout.SelectionGrid(a.ScenarioIndex, AccompanyTarget.ScenarioNames, 2);
+                if (scenario != a.ScenarioIndex) mission.SelectAccompanyScenario(scenario);
+                GUILayout.Label("Own 1001 / friendly target 3001. No obstacles.", hintStyle);
+                DrawRange("Along min / max (m)", ref alongMin, ref alongMax);
+                DrawRange("Across min / max (m)", ref acrossMin, ref acrossMax);
+                GUILayout.Label("Along: +forward / -behind. Across: +right / -left.", hintStyle);
+                syncHeading = GUILayout.Toggle(syncHeading, "Sync heading (straight / stopped)");
+                GUILayout.Label("Task maxSpeed (knots; 0 = physical limit)", hintStyle);
+                accompanyMaxSpeed = GUILayout.TextField(accompanyMaxSpeed);
+                GUILayout.Label("Target speed (knots) / initial direction (deg)", hintStyle);
+                GUILayout.BeginHorizontal(); targetSpeed = GUILayout.TextField(targetSpeed); referenceCourse = GUILayout.TextField(referenceCourse); GUILayout.EndHorizontal();
+                if (GUILayout.Button("Apply accompany settings and reset"))
+                {
+                    accompanyError = TryNumber(alongMin, out var amin) && TryNumber(alongMax, out var amax)
+                        && TryNumber(acrossMin, out var cmin) && TryNumber(acrossMax, out var cmax)
+                        && TryNumber(accompanyMaxSpeed, out var maximum) && TryNumber(targetSpeed, out var speed)
+                        && TryNumber(referenceCourse, out var course) && a.Configure(amin, amax, cmin, cmax, syncHeading, maximum, speed, course)
+                        ? null : "Use finite ordered bounds outside target hull, nonnegative speeds.";
+                }
+                if (accompanyError != null) GUILayout.Label(accompanyError, hintStyle);
+                GUILayout.Label($"Active along [{a.AlongMin:F0}, {a.AlongMax:F0}] m", labelStyle);
+                GUILayout.Label($"Active across [{a.AcrossMin:F0}, {a.AcrossMax:F0}] m", labelStyle);
+                GUILayout.Label($"syncHeading={(a.SyncHeading ? 1 : 0)}, maxSpeed={a.MaxSpeedKnots:F1} knots", labelStyle);
+                GUILayout.Label($"Along {a.Along:F1}, across {a.Across:F1} m", labelStyle);
+                GUILayout.Label($"{a.Status} | position rate {a.PositionRate:F2} m/s", labelStyle);
+                GUILayout.Label($"Heading error {a.HeadingError:F1} deg", labelStyle);
+                GUILayout.Label("Turns: position first; align when straight.", hintStyle);
+                GUILayout.Label($"Elapsed {a.Elapsed:F1}/{a.Scenario.duration_s:F0} s", labelStyle);
+                GUILayout.Label($"In position {(a.TaskTime > 0 ? a.InPositionTime/a.TaskTime : 0):P0}", labelStyle);
+                GUILayout.Label("Green: friendly target. Cyan: allowed position band. Starts outside the band.", hintStyle);
+            }
+            else if (mission.IsFollowing)
             {
                 var follow = mission.Following;
                 GUILayout.Label("FOLLOWING MAP", titleStyle);
@@ -193,14 +231,14 @@ public class BoatParameterPanel : MonoBehaviour
         boat.lengthMetres = DrawSlider("Hull length", boat.lengthMetres, 1f, 30f, "m");
         boat.beamMetres = DrawSlider("Hull beam", boat.beamMetres, 0.5f, 10f, "m");
         GUILayout.Label($"Circular hull radius: {boat.CollisionRadius:F2} m (collision)", hintStyle);
-        if (mission == null || !mission.IsFollowing)
+        if (mission == null || !mission.HasMovingTarget)
         {
             boat.waypointRadiusMultiplier = DrawSlider("Waypoint radius multiplier", boat.waypointRadiusMultiplier, 1f, 20f, "x");
             GUILayout.Label($"Waypoint acceptance radius: {boat.WaypointRadius:F2} m", hintStyle);
         }
         GUILayout.Label("Speed and turn rates are acceleration-limited. Settings apply in Manual and Jev modes.", hintStyle);
         var obstacles = GetComponent<DynamicObstacleField>();
-        if (obstacles != null)
+        if (obstacles != null && (mission == null || !mission.IsAccompany))
         {
             obstacles.smallAvoidanceRadius = DrawSlider("Small target avoidance", obstacles.smallAvoidanceRadius, 10f, 100f, "m");
             obstacles.largeAvoidanceRadius = DrawSlider("Large target avoidance", obstacles.largeAvoidanceRadius, 80f, 100f, "m");
@@ -248,6 +286,14 @@ public class BoatParameterPanel : MonoBehaviour
         hintStyle.normal.textColor = Color.gray;
         hintStyle.wordWrap = true;
     }
+
+    void DrawRange(string label, ref string minimum, ref string maximum)
+    {
+        GUILayout.Label(label, labelStyle);
+        GUILayout.BeginHorizontal(); minimum = GUILayout.TextField(minimum); maximum = GUILayout.TextField(maximum); GUILayout.EndHorizontal();
+    }
+    static bool TryNumber(string text, out float value) => float.TryParse(text, System.Globalization.NumberStyles.Float,
+        System.Globalization.CultureInfo.InvariantCulture, out value);
 
     float DrawSlider(
         string label,

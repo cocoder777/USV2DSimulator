@@ -293,5 +293,5 @@ def build_stop_payload(obs, model="jev-latest"):
     return build_payload(obs, model)
 
 
-def status_params(context):
+def status_params(context, observation=None):
     return {"targetPlatformId": context.get("targetPlatformId")}

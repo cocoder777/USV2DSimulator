@@ -1,19 +1,7 @@
-"""Waypoint-only geometry in a fixed east/north frame. No reference path or bow state."""
+"""Waypoint circle entry and passing-speed facts."""
 
 import math
-
-EARTH_RADIUS = 6378137.0
-KNOT_MPS = 1852 / 3600
-
-
-def xy(lon_lat, origin):
-    lon, lat = lon_lat
-    lon0, lat0 = origin
-    return (
-        (lon - lon0) * math.pi / 180 * EARTH_RADIUS * math.cos(math.radians(lat0)),
-        (lat - lat0) * math.pi / 180 * EARTH_RADIUS,
-    )
-
+from geometry.coordinates import xy
 
 def circle_interval(a, b, center, radius):
     dx, dy = b[0] - a[0], b[1] - a[1]
@@ -29,7 +17,6 @@ def circle_interval(a, b, center, radius):
         1.0, (-bb + math.sqrt(disc)) / (2 * aa)
     )
     return (low, high) if low <= high else None
-
 
 class WaypointGeometry:
     def __init__(self, observation):

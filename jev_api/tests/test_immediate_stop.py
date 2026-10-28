@@ -13,8 +13,9 @@ from decision_worker import DecisionScheduler
 def stop_packet():
     request = packet(observation())
     request["type"] = "stop_request"
+    request["observation"]["operation"] = "stop"
     request["observation"]["task"] = {
-        "mode": "immediate_stop", "stop_speed_mps": 0.000001,
+        "code": "trackingMode", "stop_speed_mps": 0.000001,
     }
     request["observation"]["boat"]["targetSpeed"] = 6.0
     request["observation"]["boat"]["targetCourse"] = 90.0

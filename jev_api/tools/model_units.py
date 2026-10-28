@@ -3,7 +3,7 @@
 from functools import wraps
 import json
 import re
-from tools.waypoint_geometry import KNOT_MPS
+from geometry.coordinates import KNOT_MPS
 
 
 def model_speed_units(builder):

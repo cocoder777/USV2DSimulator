@@ -7,12 +7,16 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from choice_control import build_payload, decode_action, ACTION_CHOICES
-from tools.waypoint_geometry import xy, EARTH_RADIUS, KNOT_MPS, WaypointGeometry, circle_interval
-from tools.navigation_motion import predict_ground_motion, bounded_turn, braking_facts, preview_duration
-from tools.obstacle_geometry import nearby_obstacles, snapshot_clearance
+from geometry.coordinates import xy, EARTH_RADIUS, KNOT_MPS
+from geometry.waypoint import WaypointGeometry, circle_interval
+from geometry.motion import predict_ground_motion, bounded_turn, braking_facts, preview_duration
+from geometry.obstacles import nearby_obstacles, snapshot_clearance
 from boat_client import valid_request
-from tools.client_protocol import UnitySnapshotAdapter, TASK, STOP
-from tools.following_geometry import moving_range, relative_facts, line_reference_facts, course_error
+from protocol.unity_snapshot import UnitySnapshotAdapter
+from protocol.frames import TASK, STOP
+from protocol.status import status_content
+from protocol.frames import STATUS, json_packets, Reassembler
+from geometry.relative_motion import moving_range, relative_facts, line_reference_facts, course_error
 COURSES_DEG = tuple(range(0,360,45))
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,14 +40,14 @@ def execution(heading=90, yaw=0):
 def observation(level=0):
     p = ROOT / "Assets/StreamingAssets" / ("fixed_route.json" if level == 0 else f"Maps/level_{level}.json")
     route = json.loads(p.read_text(encoding="utf-8-sig"))
-    return {"model_speed_unit": "mps",
+    return {"model_speed_unit": "mps", "operation": "execute",
             "planning": {"action_duration_s": 1.0, "simulation_paused_while_deciding": True},
             "action_space": {"speeds_knots": [50 * f for f in (0, .05, .1, .2, .35, .5, .75, 1)],
                              "courses_deg": list(COURSES_DEG)},
             "boat": {"longitude": ORIGIN[0], "latitude": ORIGIN[1], "targetSpeed": 0,
                      "targetCourse": None, "collision_radius_m": math.hypot(11.6, 3.4) / 2},
             "execution": execution(),
-            "task": {"planWaypointNum": len(route["waypoints"]) - 1, "next_waypoint_index": 0,
+            "task": {"code": "trackingMode", "planWaypointNum": len(route["waypoints"]) - 1, "next_waypoint_index": 0,
                      "routeSpeed_unit": "m/s",
                      "planWaypointList": [dict(zip(("routeLon", "routeLat"), geo(p["x"], p["y"])),
                                               routeSpeed=p["routeSpeed"]) for p in route["waypoints"][1:]],
@@ -407,6 +411,9 @@ class FollowingTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertTrue(valid_request(request))
         self.assertEqual(request["observation"]["task"]["reference_course_deg"], 0)
+        self.assertEqual(request["observation"]["task"]["code"], "targetFollowing")
+        self.assertEqual(request["observation"]["operation"], "stop")
+        self.assertNotIn("mode", request["observation"]["task"])
         result = build_payload(request["observation"])
         self.assertIn("IMMEDIATE STOP", result["questions"]["action"]["instructions"])
         self.assertEqual(result["state"]["task"]["mode"], "immediate_stop")
@@ -416,6 +423,35 @@ class FollowingTests(unittest.TestCase):
         self.assertIn("NONZERO_NOT_STOP", json.loads(result["questions"]["action"]["criteria"]["speed_3__north"])["warnings"])
         self.assertIn("target", result["state"])
         self.assertEqual(len(result["questions"]["action"]["criteria"]), 64)
+
+    def test_status_preserves_wire_identity_and_task_specific_params(self):
+        task, _ = self.wire()
+        contexts = {(task["simId"], task["id"]): task["params"]}
+        stop = copy.deepcopy(task)
+        stop.pop("params")
+        result = dict(decision_id="stop", tick=50)
+        content = status_content(stop, 1, "stopping", contexts, result, 789)
+        self.assertEqual(content, dict(simId="episode", id="run", code="targetFollowing",
+            status=1, description="stopping", params=dict(targetPlatformId=3001,
+                unity_only=dict(decision_id="stop", tick=50, control_timestamp=789))))
+        assembler = Reassembler()
+        decoded = None
+        for data in reversed(json_packets(content, STATUS, stamp=123)):
+            decoded = assembler.add(data, ("127.0.0.1", 5005))
+        self.assertEqual(decoded, content)
+        self.assertNotIn("operation", decoded)
+        self.assertNotIn("operation", decoded["params"])
+
+    def test_unimplemented_codes_are_rejected_but_failure_can_be_reported(self):
+        for code in ("followMode", "accompanyMode", "unknown"):
+            task, _ = self.wire()
+            task["code"] = code
+            with self.assertRaises(ValueError):
+                UnitySnapshotAdapter().add_task(task, TASK)
+            content = status_content(task, 3, "unsupported task", {})
+            self.assertEqual(content["code"], code)
+            self.assertEqual(content["status"], 3)
+            self.assertEqual(content["params"]["currentRoute"], 0)
 
     def test_invalid_following_constraints_rejected(self):
         for field, value in [("minFollowingDistanceM", float("nan")), ("maxFollowingDistanceM", 50),
@@ -479,7 +515,7 @@ class FollowingTests(unittest.TestCase):
         obs["target"].update(targetSpeed=0, targetCourse=None)
         self.assertNotIn("range_recovery", build_payload(obs)["state"])
         obs["target"]["longitude"], obs["target"]["latitude"] = geo(0, 300)
-        obs["task"]["mode"] = "immediate_stop"
+        obs["operation"] = "stop"
         obs["task"]["stop_speed_mps"] = .1
         self.assertNotIn("range_recovery", build_payload(obs)["state"])
 

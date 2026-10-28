@@ -2,162 +2,21 @@
 
 import argparse
 import json
-import math
 import socket
 import select
-from tools.client_protocol import (TASK, CONTROL, STATUS, STOP, SITUATION, Reassembler,
-    UnitySnapshotAdapter, parse_header, decode_situation, json_packets, control_packet, timestamp)
+from protocol.frames import (TASK, STATUS, STOP, SITUATION, Reassembler,
+    parse_header, decode_situation, json_packets, control_packet, timestamp)
 
-from decision_worker import DecisionScheduler, IDENTITY_FIELDS
-from tools.waypoint_geometry import WaypointGeometry
+from decision_worker import DecisionScheduler
+from protocol.unity_snapshot import UnitySnapshotAdapter
+from protocol.status import status_content
+from validation import valid_request
 
 API_KEY = "apikey_22485fa78919f3a446da960b347c7a0275b4_0f3093e5fd9ea561ec8e253d3cfb2258c39060afba61a9fc49db198f8e9a5bf7"
 
 
 def dumps(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-
-
-def valid_request(packet):
-    if (
-        not isinstance(packet, dict)
-        or packet.get("type") not in ("decision_request", "stop_request")
-    ):
-        return False
-    if any(
-        not isinstance(packet.get(k), str) or not packet[k]
-        for k in IDENTITY_FIELDS[:-1]
-    ):
-        return False
-    if type(packet.get("tick")) is not int or packet["tick"] < 0:
-        return False
-    try:
-        obs = packet["observation"]
-        planning = obs["planning"]
-        duration = planning["action_duration_s"]
-        if "action_count" in planning or "actions" in obs:
-            return False
-        if (
-            type(duration) not in (int, float)
-            or not math.isfinite(duration)
-            or duration <= 0
-        ):
-            return False
-        boat, task, execution, space = (
-            obs["boat"],
-            obs["task"],
-            obs["execution"],
-            obs["action_space"],
-        )
-
-        def finite(v):
-            return type(v) in (int, float) and math.isfinite(v)
-
-        if not all(finite(boat[k]) for k in ("longitude", "latitude", "targetSpeed")):
-            return False
-        if not -180 <= boat["longitude"] <= 180 or not -90 <= boat["latitude"] <= 90:
-            return False
-        hull = boat.get("collision_radius_m")
-        if not finite(hull) or hull <= 0:
-            return False
-        obstacles = obs.get("obstacles", [])
-        if not isinstance(obstacles, list):
-            return False
-        ids = set()
-        for obstacle in obstacles:
-            if not isinstance(obstacle, dict):
-                return False
-            identifier = obstacle.get("id")
-            if not isinstance(identifier, str) or not identifier or identifier in ids:
-                return False
-            ids.add(identifier)
-            obstacle_speed, obstacle_course = obstacle.get("targetSpeed"), obstacle.get("targetCourse")
-            if obstacle_speed is not None and not finite(obstacle_speed):
-                return False
-            if obstacle_course is not None and (not finite(obstacle_course) or not 0 <= obstacle_course < 360):
-                return False
-            if (not all(finite(obstacle[k]) for k in ("longitude", "latitude", "radius_m"))
-                or not -180 <= obstacle["longitude"] <= 180
-                or not -90 <= obstacle["latitude"] <= 90 or obstacle["radius_m"] <= 0
-                or not finite(obstacle["avoidance_radius_m"])
-                or obstacle["avoidance_radius_m"] < obstacle["radius_m"]):
-                return False
-        course = boat["targetCourse"]
-        if course is not None and (not finite(course) or not 0 <= course < 360):
-            return False
-        if course is None and abs(boat["targetSpeed"]) > 1e-5:
-            return False
-        if execution.get("motion_model") != "bounded_acceleration":
-            return False
-        if not all(finite(execution[k]) and execution[k] > 0 for k in (
-            "max_acceleration_mps2", "max_deceleration_mps2", "max_yaw_rate_deg_s",
-            "max_angular_acceleration_deg_s2", "fixed_dt_s", "hull_length_m", "hull_beam_m")):
-            return False
-        if (not finite(execution["heading_course_deg"]) or not 0 <= execution["heading_course_deg"] < 360
-                or not finite(execution["yaw_rate_deg_s"])
-                or abs(execution["yaw_rate_deg_s"]) > execution["max_yaw_rate_deg_s"] + 1e-4):
-            return False
-        if (not finite(execution["active_target_course_deg"]) or not 0 <= execution["active_target_course_deg"] < 360
-                or not finite(execution["active_course_error_deg"])):
-            return False
-        ratio = duration / execution["fixed_dt_s"]
-        if not 1 <= ratio <= 100000 or abs(ratio - round(ratio)) > 1e-3:
-            return False
-        speeds, courses = space["speeds_knots"], space["courses_deg"]
-        if (
-            len(speeds) != 8
-            or len(courses) != 8
-            or not all(finite(v) and v >= 0 for v in speeds)
-            or not all(finite(v) and 0 <= v < 360 for v in courses)
-        ):
-            return False
-        if packet["type"] == "stop_request":
-            return (
-                task.get("mode") == "immediate_stop"
-                and finite(task["stop_speed_mps"])
-                and task["stop_speed_mps"] >= 0
-            )
-        if task.get("mode") == "immediate_stop":
-            return False
-        if task.get("mode") == "target_following":
-            target = obs["target"]
-            return (all(finite(target[k]) for k in ("longitude", "latitude", "targetSpeed", "radius_m"))
-                    and -180 <= target["longitude"] <= 180 and -90 <= target["latitude"] <= 90
-                    and 0 <= target["targetSpeed"] <= 200 and target["radius_m"] > 0
-                    and (target["targetCourse"] is None and target["targetSpeed"] == 0
-                         or finite(target["targetCourse"]) and 0 <= target["targetCourse"] < 360)
-                    and all(finite(task[k]) for k in ("minFollowingDistanceM", "maxFollowingDistanceM", "reference_course_deg"))
-                    and target["radius_m"] + hull < task["minFollowingDistanceM"] < task["maxFollowingDistanceM"]
-                    and 0 <= task["reference_course_deg"] < 360)
-        if type(task["planWaypointNum"]) is not int or task["planWaypointNum"] != len(
-            task["planWaypointList"]
-        ):
-            return False
-        if (
-            type(task["next_waypoint_index"]) is not int
-            or not 0 <= task["next_waypoint_index"] < task["planWaypointNum"]
-        ):
-            return False
-        if (
-            task["routeSpeed_unit"] != "m/s"
-            or not finite(task["arrival_radius_m"])
-            or task["arrival_radius_m"] <= 0
-            or not finite(task["stop_speed_mps"])
-            or task["stop_speed_mps"] < 0
-        ):
-            return False
-        for p in task["planWaypointList"]:
-            if (
-                not all(finite(p[k]) for k in ("routeLon", "routeLat", "routeSpeed"))
-                or p["routeSpeed"] < 0
-                or not -180 <= p["routeLon"] <= 180
-                or not -90 <= p["routeLat"] <= 90
-            ):
-                return False
-        WaypointGeometry(obs)
-        return True
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return False
 
 
 def report_decision(record, log):
@@ -215,19 +74,7 @@ def serve(settings):
     last_control_stamp = 0
 
     def send_status(sock, task, status, description, result=None, control_stamp=None):
-        key = task["simId"], task["id"]
-        context = task.get("params", adapter.tasks.get(key, {}))
-        params = ({"targetPlatformId": context.get("targetPlatformId")} if task.get("code") == "targetFollowing"
-                  else {"currentRoute": context.get("currentRoute", 0) if isinstance(context, dict) else 0})
-        local = task.get("unity_only", {})
-        if local.get("decision_id"):
-            params["unity_only"] = {k: local[k] for k in ("decision_id", "tick")}
-        if result is not None:
-            params["unity_only"] = {k: result[k] for k in ("decision_id", "tick")}
-            if control_stamp is not None:
-                params["unity_only"]["control_timestamp"] = control_stamp
-        content = {k: task[k] for k in ("simId", "id", "code")}
-        content.update(status=status, description=description, params=params)
+        content = status_content(task, status, description, adapter.tasks, result, control_stamp)
         for data in json_packets(content, STATUS):
             sock.sendto(data, endpoint)
 

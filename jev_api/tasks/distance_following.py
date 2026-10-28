@@ -1,10 +1,12 @@
-"""Line-of-sight distance following and joint-time forecasts. Jev selects every action."""
+"""Existing line-of-sight distance task; not the customer followMode."""
+
 import math
-
-from tools.navigation_motion import predict_ground_motion, preview_duration, braking_facts
-from tools.waypoint_geometry import KNOT_MPS, xy
-from tools.obstacle_geometry import nearby_obstacles, clearance_facts
-
+from action_space import ACTION_CHOICES
+from geometry.coordinates import KNOT_MPS, xy
+from geometry.motion import predict_ground_motion, preview_duration, braking_facts
+from geometry.obstacles import nearby_obstacles, clearance_facts
+from geometry.relative_motion import direction, velocity, relative_facts, line_reference_facts, course_error, moving_range
+from tasks.stop import following_stop_objective
 
 # Shared schema/rules replace prose repeated for each of the 64 choices.
 CANDIDATE_SCHEMA = {
@@ -38,62 +40,7 @@ WARNING_MEANINGS = {
 }
 
 
-def direction(course):
-    angle = math.radians(course)
-    return math.sin(angle), math.cos(angle)
-
-
-def velocity(speed_knots, course):
-    if course is None:
-        return 0.0, 0.0
-    return tuple(speed_knots * KNOT_MPS * v for v in direction(course))
-
-
-def relative_facts(delta, own_velocity, target_velocity, forward):
-    distance = math.hypot(*delta)
-    relative = [t - b for t, b in zip(target_velocity, own_velocity)]
-    return {"distance_m": distance,
-            "range_rate_mps": sum(a * b for a, b in zip(delta, relative)) / distance if distance > 1e-9 else 0.0,
-            "along_behind_m": sum(a * b for a, b in zip(delta, forward)),
-            "cross_track_m": -delta[0] * forward[1] + delta[1] * forward[0]}
-
-
-def line_reference_facts(delta, reference):
-    """Reference on the current boat-target line, measured from own position."""
-    distance = math.hypot(*delta)
-    if distance <= 1e-9:
-        return {"defined": False, "east_m": 0.0, "north_m": 0.0,
-                "range_error_m": reference, "line_of_sight_course_deg": None, "away_course_deg": None}
-    unit = [c / distance for c in delta]
-    bearing = math.degrees(math.atan2(unit[0], unit[1])) % 360
-    return {"defined": True, "east_m": delta[0] - reference * unit[0],
-            "north_m": delta[1] - reference * unit[1], "range_error_m": abs(distance - reference),
-            "line_of_sight_course_deg": bearing, "away_course_deg": (bearing + 180) % 360}
-
-
-def course_error(bearing, course):
-    """Signed shortest clockwise error; opposite headings consistently use -180."""
-    return (bearing - course + 180) % 360 - 180
-
-
-def moving_range(motion, target_position, target_velocity, duration):
-    """Relative straight sweeps at the forecast samples; includes time zero."""
-    path = motion["path"]
-    # predict_ground_motion uses uniform dt and may have a shorter final step.
-    dt = motion["sample_dt_s"]
-    relative = [[target_position[j] + target_velocity[j] * min(i * dt, duration) - p[j]
-                 for j in (0, 1)] for i, p in enumerate(path)]
-    minimum, maximum = math.inf, 0.0
-    for a, b in zip(relative, relative[1:]):
-        v = [b[j] - a[j] for j in (0, 1)]
-        vv = sum(c * c for c in v)
-        t = min(1.0, max(0.0, -sum(a[j] * v[j] for j in (0, 1)) / vv)) if vv else 0
-        minimum = min(minimum, math.hypot(*(a[j] + t * v[j] for j in (0, 1))))
-        maximum = max(maximum, math.hypot(*a), math.hypot(*b))
-    return minimum, maximum, relative[-1]
-
-
-def build_following_payload(obs, model, choices):
+def build_payload(obs, model="jev-latest"):
     task, boat, target, execution = obs["task"], obs["boat"], obs["target"], obs["execution"]
     duration = obs["planning"]["action_duration_s"]
     speed = boat["targetSpeed"] * KNOT_MPS
@@ -110,7 +57,7 @@ def build_following_payload(obs, model, choices):
     current["own_radial_velocity_mps"] = sum(v * u for v, u in zip(own_velocity, unit))
     current["target_approaching_own_position"] = current["target_radial_velocity_mps"] < -.1
     line_reference = line_reference_facts(position, reference)
-    stopping = task["mode"] == "immediate_stop"
+    stopping = obs["operation"] == "stop"
     too_far = not stopping and current["distance_m"] > upper
     bearing = line_reference["line_of_sight_course_deg"]
     heading_error = course_error(bearing, execution["heading_course_deg"]) if bearing is not None else 0
@@ -130,7 +77,7 @@ def build_following_payload(obs, model, choices):
     combined = boat["collision_radius_m"] + target["radius_m"]
     obstacles = nearby_obstacles(obs)
     state = {
-        "task": {"mode": task["mode"], "guidance": "line_of_sight_distance", "min_distance_m": lower, "max_distance_m": upper,
+        "task": {"mode": "immediate_stop" if stopping else "target_following", "guidance": "line_of_sight_distance", "min_distance_m": lower, "max_distance_m": upper,
                  "reference_distance_m": reference,
                  "distance_definition": "Centre-to-centre Euclidean range. Reference lies on the current own-boat/target line, on the target side facing own boat. No rear-position or lateral-offset objective.",
                  "stage": "too_close" if current["distance_m"] < lower else "too_far" if current["distance_m"] > upper else "in_band",
@@ -169,7 +116,7 @@ def build_following_payload(obs, model, choices):
                 estimated_time_to_inward_heading_s=turn_to_inward,
                 warning="Current range is still allowed. Start a safe recovery turn before it exceeds maximum; estimates assume current range rate/bearing and are not guarantees.")
     criteria = {}
-    for name, (i, j) in choices.items():
+    for name, (i, j) in ACTION_CHOICES.items():
         commanded_speed = obs["action_space"]["speeds_knots"][i] * KNOT_MPS
         course = obs["action_space"]["courses_deg"][j]
         motion = predict_ground_motion(speed, boat["targetCourse"], commanded_speed, course, execution, duration, route_details=False)
@@ -253,18 +200,7 @@ def build_following_payload(obs, model, choices):
         "Code only computes facts; all original 64 choices remain available to you."
     )
     if stopping:
-        state["task"] = {"mode": "immediate_stop", "stop_speed_threshold_mps": task["stop_speed_mps"],
-                         "objective": "Stop own boat. Distance-following and escape objectives are suspended."}
-        state.pop("line_reference")
-        instructions = (
-            "IMMEDIATE STOP overrides the previous following mission. Choose ZERO target speed to brake own boat to rest "
-            "and continue choosing zero until stopped. A nonzero target speed is not a stop command. "
-            "At zero target speed, course is ignored; braking takes time under the configured deceleration. "
-            "The moving target may pull away: this is expected and must NOT cause you to resume following, "
-            "match its velocity or maintain the previous following distance. Distance-band and escape objectives are suspended. "
-            "Only the current single action is executed; the long forecast is hypothetical. "
-            "Physical collision facts remain visible; they do not turn this explicit stop request into a following task."
-        )
+        instructions = following_stop_objective(state, task)
     elif current["distance_m"] < lower:
         instructions = (
             "CURRENTLY TOO CLOSE: actively INCREASE separation to at least the minimum. "
@@ -297,3 +233,65 @@ def build_following_payload(obs, model, choices):
         ) + instructions
     instructions += " Each criterion is a JSON facts table. Read candidate_schema for columns/units and warning_meanings for every warning; all 64 choices remain available."
     return {"model": model, "state": state, "questions": {"action": {"type": "choice", "instructions": instructions, "criteria": criteria}}}
+
+
+def validate_observation(obs, finite):
+    task = obs["task"]
+    hull = obs["boat"]["collision_radius_m"]
+    target = obs["target"]
+    return (all(finite(target[k]) for k in ("longitude", "latitude", "targetSpeed", "radius_m"))
+            and -180 <= target["longitude"] <= 180 and -90 <= target["latitude"] <= 90
+            and 0 <= target["targetSpeed"] <= 200 and target["radius_m"] > 0
+            and (target["targetCourse"] is None and target["targetSpeed"] == 0
+                 or finite(target["targetCourse"]) and 0 <= target["targetCourse"] < 360)
+            and all(finite(task[k]) for k in ("minFollowingDistanceM", "maxFollowingDistanceM", "reference_course_deg"))
+            and target["radius_m"] + hull < task["minFollowingDistanceM"] < task["maxFollowingDistanceM"]
+            and 0 <= task["reference_course_deg"] < 360)
+
+
+def validate_params(params):
+    lower, upper = params.get("minFollowingDistanceM"), params.get("maxFollowingDistanceM")
+    if (type(params.get("targetPlatformId")) is not int or not 0 <= params["targetPlatformId"] <= 65535
+            or params["targetPlatformId"] == params["platCode"]
+            or any(type(v) not in (int, float) or not math.isfinite(v) for v in (lower, upper))
+            or not 0 < lower < upper):
+        raise ValueError("Invalid target following task")
+
+
+def target_platform_id(params):
+    return params["targetPlatformId"]
+
+
+def validate_manifest(params, radii, expected):
+    target_id = params["targetPlatformId"]
+    if target_id not in expected or params["minFollowingDistanceM"] <= radii[str(target_id)] + radii[str(params["platCode"])]:
+        raise ValueError("Missing target or following minimum inside combined hulls")
+
+
+def adapt_observation(params, local, records, obs, state):
+    target = next(r for r in records if r["platformId"] == params["targetPlatformId"])
+    speed, course = target["targetSpeed"], target["targetCourse"]
+    if speed is None or speed < 0 or (speed > 1e-5 and course is None):
+        raise ValueError("Unknown or unsupported target motion")
+    speed_mps = speed * KNOT_MPS
+    stationary = speed_mps < (0.2 if state.get("stationary", False) else 0.1)
+    reference_course = state.get("course")
+    if not stationary and course is not None:
+        reference_course = course
+    if reference_course is None:
+        boat = obs["boat"]
+        delta = xy((target["longitude"], target["latitude"]), (boat["longitude"], boat["latitude"]))
+        reference_course = math.degrees(math.atan2(delta[0], delta[1])) % 360
+    state.update(stationary=stationary, course=reference_course)
+    obs["target"] = dict(target, radius_m=local["collision_radii_m"][str(params["targetPlatformId"])])
+    obs["task"] = dict(params, code="targetFollowing", reference_course_deg=reference_course,
+                       target_stationary=stationary)
+
+
+def build_stop_payload(obs, model="jev-latest"):
+    # Preserve target-motion/collision facts and the existing compact stop choices.
+    return build_payload(obs, model)
+
+
+def status_params(context):
+    return {"targetPlatformId": context.get("targetPlatformId")}

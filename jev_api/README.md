@@ -1,24 +1,38 @@
-# Jev 寻线与目标尾随决策客户端
+# Jev 航线与目标距离跟随决策客户端
 
 接收 Unity 模拟的甲方任务及兵力融合态势，请求 Jev 从 64 个离散候选中选择目标航速/航向。Unity 采样后暂停，收到匹配动作后执行指定时长，再次采样；默认 1 s 仿真时间，物理步长 0.02 s。启动及界面操作见[项目 README](../README.md)，完整字段、分片与状态语义见[当前协议](../docs/bian/当前控制与Jev协议.md)。
 
 | 文件 | 职责 |
 | --- | --- |
-| `boat_client.py` | 点播/组播接收、任务适配、状态及控制发送、日志 |
-| `tools/client_protocol.py` | 甲方二进制帧、特殊值、分片重组、Unity 快照适配 |
+| `boat_client.py` | 命令行、点播/组播收发、事件循环、状态及控制发送、日志 |
+| `protocol/frames.py` | 甲方二进制帧、特殊值、量化和分片重组 |
+| `protocol/unity_snapshot.py` | 同次完整快照屏障、身份隔离、调用任务适配 |
+| `protocol/status.py` | 状态报文身份、采样关联及公共封装 |
+| `validation.py` | 内部请求、公共态势及受限动力学校验 |
 | `decision_worker.py` | 决策去重、后台调度、HTTPS 线程上下文 |
-| `choice_control.py` | 导航/立即停止模型请求、64 Choice、动作解码 |
-| `tools/waypoint_geometry.py` | 经纬度转固定东/北坐标、入圈与通过速度计算 |
-| `tools/navigation_motion.py` | 与 Unity 同规则的受限加减速和角运动预测，不选择动作 |
-| `tools/obstacle_geometry.py` | 附近障碍物、当前位置快照净距及运动事实 |
-| `tools/model_units.py` | Jev 速度表达单位转换，不改变计算与判断 |
+| `action_space.py`、`choice_control.py` | 固定 64 Choice、请求总入口、模型表达处理及动作解码 |
+| `tasks/registry.py` | 甲方/项目任务编码到任务模块的唯一注册表 |
+| `tasks/task1_waypoint.py` | 航线任务参数、业务适配与校验、提示词、请求构造及进度参数 |
+| `tasks/distance_following.py` | 当前连线距离跟随的参数、业务适配与校验、提示词、请求及状态参数 |
+| `tasks/stop.py` | 公共停车操作分发、停车目标与提示词；保留跟随目标的运动/碰撞事实 |
+| `tasks/presentation.py` | 模型请求共用的位置、障碍净距文字及避障说明 |
+| `geometry/coordinates.py` | 经纬度转固定东/北坐标、公共单位常量 |
+| `geometry/waypoint.py` | 航点入圈与通过速度计算 |
+| `geometry/motion.py` | 与 Unity 同规则的受限加减速和角运动预测，不选择动作 |
+| `geometry/obstacles.py` | 附近障碍物、当前位置快照净距及运动事实 |
+| `geometry/relative_motion.py` | 两艇相对运动、连线参考与联合时刻距离扫掠 |
+| `tools/model_units.py` | Jev 速度表达单位转换和候选事实字符串序列化，不改变计算与判断 |
 | `tools/http_transport.py` | HTTPS 复用、代理兼容、预连接、计时 |
 
-入口与核心流程位于本目录，辅助计算与传输位于 `tools/`，离线测试位于 `tests/`，示例位于 `examples/`。`jev_api_guoliang/` 是独立程序，本客户端不导入或依赖该目录。
+入口与调度位于本目录；任务业务位于 `tasks/`，数值计算位于 `geometry/`，通信协议与快照适配位于 `protocol/`，HTTP 与模型单位表达位于 `tools/`。离线测试位于 `tests/`，示例位于 `examples/`。`jev_api_guoliang/` 是独立程序，本客户端不导入或依赖该目录。
+
+内部观测以 `observation.task.code` 保留原任务编码，以 `observation.operation="execute"/"stop"` 区分执行和停车。停车不覆盖任务类型，仍读取已接收任务配置及新的完整快照。这两个内部字段不增加或改变甲方报文字段，也不直接加入 HTTP state；模型请求保持各任务原有表达。请求经过公共单位转换和 Choice 字符串序列化后，由 worker 统一调用 HTTP，任务模块不直接发网络请求。
+
+新增任务时，在任务模块提供 `validate_params/validate_manifest/target_platform_id/adapt_observation/validate_observation/build_payload/status_params`，并在 `registry.py` 注册编码。`adapt_observation` 接收独立任务状态字典，重置或切换任务时由快照适配器清空；该状态不能补齐当前态势。需要目标专属停车事实时可提供 `build_stop_payload`，否则使用公共航线停车构造器。未来甲方 5.2 `followMode` 与 5.3 `accompanyMode` 尚未注册；当前 `targetFollowing` 继续表示原连线距离任务。已实现航线使用 `task1_waypoint.py`，后续伴随实现时使用 `task3_accompany.py`。
 
 ## 目标距离跟随
 
-`tools/following_geometry.py` 按当前态势构造两艇连线上的距离参考位置、距离变化率、目标趋近本艇的径向分量和直接远离方位，并将目标匀速预测与本艇受限运动按同一未来时刻比较。每个候选提供动作期间最小／最大距离、结束距离／距离变化率、软参考误差及保持指令的长预览，仍由 Jev 从原 64 Choice 选动作；不排序、过滤或代选。长预测包含假设与误差限制，不等于完整 MPC 或安全保证。其他障碍物继续采用原快照预测。
+`tasks/distance_following.py` 调用 `geometry/relative_motion.py`，按当前态势构造两艇连线上的距离参考位置、距离变化率、目标趋近本艇的径向分量和直接远离方位，并将目标匀速预测与本艇受限运动按同一未来时刻比较。每个候选提供动作期间最小／最大距离、结束距离／距离变化率、软参考误差及保持指令的长预览，仍由 Jev 从原 64 Choice 选动作；不排序、过滤或代选。长预测包含假设与误差限制，不等于完整 MPC 或安全保证。其他障碍物继续采用原快照预测。
 
 新增项目任务编码 `targetFollowing`，`params` 为 `platCode/targetPlatformId/minFollowingDistanceM/maxFollowingDistanceM`，不含航路点或 `currentRoute`；非甲方已定义编码。指定目标通过 `0x0060` 提供当前态势并参与完整快照屏障，适配后独立放在 `observation.target`，不混入普通障碍物。目标缺失、运动数据未知或间距参数无效时失败并暂停。目标低速方向缓存仅保留内部兼容，不用于确定控制参考点，且不能补齐当前快照。模型 state.task.guidance 为 line_of_sight_distance，line_reference 由当前两艇连线计算；原后方位置和横向偏移不再是控制目标。过近或预测逼近下限时要求主动远离，尤其关注迎面目标；超距时仍应恢复间距，不能仅因目标正在接近就逃离。候选运动预测保留转向／加速惯性；零目标速度会忽略航向，不能原地转向或阻止目标继续接近。
 

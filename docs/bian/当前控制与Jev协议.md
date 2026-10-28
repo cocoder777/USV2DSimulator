@@ -101,7 +101,7 @@ Unity先组播全部当前实体，再点播任务/停止；接收顺序不限�
 
 跟随任务不提供 `planWaypointList/planWaypointNum/currentRoute`；本艇与目标身份必须不同，两实体半径之和 < 最小中心间距 < 最大中心间距，均为有限米制数值。目标半径位于 `unity_only.collision_radii_m`，目标必须参加当前快照屏障。目标 0x0060 使用原有位置、实际速度及运动方向，不新增类型枚举；direction 方位不能当作运动方向。目标速度未知、运动中方向未知或本轮目标缺失均失败暂停，不使用旧缓存补齐。`unity_only` 仍复用动作时长、执行状态、快照与停止阈值；跟踪省略不参与判定的 arrival_radius_m。客户端需重启加载该适配变化，旧格式中存在的多余字段仍可接收。
 
-Python 内部 `observation.task.mode="target_following"`，目标放在独立 `target`，其他实体为 `obstacles`。HTTP `state.task.guidance="line_of_sight_distance"`；`line_reference` 是目标朝向当前本艇的一侧、距目标为区间中点的位置：pF=pT-dRef*(pT-pB)/|pT-pB|。该点不根据目标运动方向定义；不要求本艇在目标后方，不惩罚侧方或前方。距离处于区间内时不强求精确中点，参考点与本艇重合也不表示应停车。原目标方向缓存仅保留内部兼容，后方／横向关系仅由 Unity 作为历史对照指标记录，不再用作模型控制目标。
+Python 内部 `observation.task.code="targetFollowing"` 保留原任务类型，`observation.operation="execute"/"stop"` 表示执行或停车，停车不覆盖原任务编码；这仅是内部表示，不增加甲方报文字段。目标放在独立 `target`，其他实体为 `obstacles`。HTTP 保留原有 `state.task.mode` 与 `state.task.guidance="line_of_sight_distance"` 表达；`line_reference` 是目标朝向当前本艇的一侧、距目标为区间中点的位置：pF=pT-dRef*(pT-pB)/|pT-pB|。该点不根据目标运动方向定义；不要求本艇在目标后方，不惩罚侧方或前方。距离处于区间内时不强求精确中点，参考点与本艇重合也不表示应停车。原目标方向缓存仅保留内部兼容，后方／横向关系仅由 Unity 作为历史对照指标记录，不再用作模型控制目标。
 
 模型状态提供当前距离、距离变化率、目标与本艇速度在当前连线上的径向分量、目标是否正趋近本艇及直接远离方位；每候选仍提供联合时刻的最小／最大距离、末端距离／距离变化率、本艇末端运动、软参考误差、径向制动余量和长预览。过近或预测将逼近下限时要求主动转向／运动拉开距离，尤其关注迎面目标，必要时安全侧向绕开；本艇零速不会阻止目标继续逼近，不能反复停车等待。超距时仍应安全追近，不能仅因目标正在接近就逃离。直接远离方位仅为几何事实，不是本地代选指令；转向／加速惯性及障碍可能要求另一侧逃逸。
 
@@ -141,7 +141,7 @@ Unity障碍物沿正弦轨迹运动，每物理步使用相对扫掠判碰，碰
 
 ## 实现和验证
 
-ClientProtocol.cs与tools/client_protocol.py负责编解码/分片；ObservationBuilder生成任务和实体；BoatUdpBridge与boat_client负责收发；UnitySnapshotAdapter负责屏障/适配；SimulationRunner负责暂停和动作关联。主项目不导入guoliang目录，通信不设version字段。
+ClientProtocol.cs与protocol/frames.py负责编解码/分片；ObservationBuilder生成任务和实体；BoatUdpBridge与boat_client负责收发；protocol/unity_snapshot.py的UnitySnapshotAdapter负责完整快照屏障及公共观测组装，tasks/负责各任务参数、业务适配、请求构造与状态参数，protocol/status.py封装公共状态关联；geometry/负责共享数值计算，SimulationRunner负责暂停和动作关联。tasks/registry.py统一注册trackingMode与targetFollowing，航线实现位于tasks/task1_waypoint.py；followMode与accompanyMode尚未实现。主项目不导入guoliang目录，通信不设version字段。
 
 离线测试：
 

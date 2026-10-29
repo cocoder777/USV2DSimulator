@@ -6,13 +6,13 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Wedge
 
 
 def plot_run(document, output):
     if document.get("task_mode") == "accompanyMode":
         return plot_accompany(document, output)
-    if document.get("task_mode") == "targetFollowing":
+    if document.get("task_mode") in ("followMode", "targetFollowing"):
         return plot_following(document, output)
     route = document["route"]
     points = route["waypoints"]
@@ -118,6 +118,12 @@ def plot_following(document, output):
         ax.plot([s["x"] for s in samples], [s["y"] for s in samples], label="Own boat", color="#0072BD")
         ax.plot([s["target"]["x"] for s in samples], [s["target"]["y"] for s in samples], label="Observed target", color="magenta")
         last = samples[-1]["target"]
+        if document.get('task_mode') == 'followMode':
+            course = last['reference_course_deg']
+            ax.add_patch(Wedge((last['x'], last['y']), metrics['max_distance_m'],
+                              180-course, 360-course,
+                              width=metrics['max_distance_m']-metrics['min_distance_m'],
+                              color='cyan', alpha=.12, label='Allowed rear sector'))
         for radius, color, label in [(metrics["min_distance_m"], "red", "Minimum range"),
                                       (metrics["max_distance_m"], "green", "Maximum range")]:
             ax.add_patch(Circle((last["x"], last["y"]), radius, fill=False, edgecolor=color, alpha=.5, label=label))

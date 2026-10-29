@@ -80,22 +80,6 @@ def build_waypoint_stop_payload(observation, model="jev-latest"):
     return payload
 
 
-def following_stop_objective(state, task):
-    state["task"] = {"mode": "immediate_stop", "stop_speed_threshold_mps": task["stop_speed_mps"],
-                     "objective": "Stop own boat. Distance-following and escape objectives are suspended."}
-    state.pop("line_reference")
-    instructions = (
-        "IMMEDIATE STOP overrides the previous following mission. Choose ZERO target speed to brake own boat to rest "
-        "and continue choosing zero until stopped. A nonzero target speed is not a stop command. "
-        "At zero target speed, course is ignored; braking takes time under the configured deceleration. "
-        "The moving target may pull away: this is expected and must NOT cause you to resume following, "
-        "match its velocity or maintain the previous following distance. Distance-band and escape objectives are suspended. "
-        "Only the current single action is executed; the long forecast is hypothetical. "
-        "Physical collision facts remain visible; they do not turn this explicit stop request into a following task."
-    )
-    return instructions
-
-
 def validate_observation(obs, finite):
     return finite(obs["task"]["stop_speed_mps"]) and obs["task"]["stop_speed_mps"] >= 0
 

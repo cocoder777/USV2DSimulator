@@ -4,13 +4,13 @@
 # target_platform_id, adapt_observation, validate_observation, build_payload and
 # status_params. A build_stop_payload hook is optional for target-specific facts.
 # ACTION_CHOICES/COURSES_DEG belong to each task; shared STOP also uses DIRECTIONS.
-# Navigation/following keep 64 choices; only accompaniment uses the finer 128 grid.
+# Route keeps 64 choices; following/accompaniment use the finer 128 grid.
 
-from tasks import task1_waypoint, distance_following, task3_accompany, stop
+from tasks import task1_waypoint, task2_following, task3_accompany, stop
 
 TASKS = {
     "trackingMode": task1_waypoint,
-    "targetFollowing": distance_following,
+    "followMode": task2_following,
     "accompanyMode": task3_accompany,
 }
 

@@ -8,7 +8,7 @@ public class BoatParameterPanel : MonoBehaviour
     private Vector2 scrollPosition;
     private float simulationSpeed = 1f;
     private float previousTimeScale;
-    private string minimumDistance = "100", maximumDistance = "200", followingError;
+    private string minimumDistance = "100", maximumDistance = "200", followingMaxSpeed = "0", followingError;
     private string alongMin = "-160", alongMax = "-140", acrossMin = "70", acrossMax = "90";
     private string accompanyMaxSpeed = "0", targetSpeed = "10", referenceCourse = "0", accompanyError;
     private bool syncHeading = true;
@@ -89,7 +89,7 @@ public class BoatParameterPanel : MonoBehaviour
         if (mission != null)
         {
             GUILayout.Label("TASK MODE", titleStyle);
-            int taskMode = GUILayout.SelectionGrid((int)mission.Mode, new[] { "Route", "Distance", "Accompany" }, 3);
+            int taskMode = GUILayout.SelectionGrid((int)mission.Mode, new[] { "Route", "Following", "Accompany" }, 3);
             if (taskMode != (int)mission.Mode) mission.SelectTaskMode((MissionManager.TaskMode)taskMode);
             if (mission.IsAccompany)
             {
@@ -129,7 +129,7 @@ public class BoatParameterPanel : MonoBehaviour
             else if (mission.IsFollowing)
             {
                 var follow = mission.Following;
-                GUILayout.Label("FOLLOWING MAP", titleStyle);
+                GUILayout.Label("ENEMY FOLLOWING", titleStyle);
                 int scenario = GUILayout.SelectionGrid(follow.ScenarioIndex, FollowingTarget.ScenarioNames, 2);
                 if (scenario != follow.ScenarioIndex) mission.SelectFollowingScenario(scenario);
                 if (follow.Scenario.obstacles.Length > 0)
@@ -143,19 +143,24 @@ public class BoatParameterPanel : MonoBehaviour
                 GUILayout.Label("Min", GUILayout.Width(30)); minimumDistance = GUILayout.TextField(minimumDistance, GUILayout.Width(80));
                 GUILayout.Label("Max", GUILayout.Width(30)); maximumDistance = GUILayout.TextField(maximumDistance, GUILayout.Width(80));
                 GUILayout.EndHorizontal();
+                GUILayout.Label("Task maxSpeed (knots; 0 = physical limit)", hintStyle);
+                followingMaxSpeed = GUILayout.TextField(followingMaxSpeed);
                 if (GUILayout.Button("Apply distances and reset"))
                 {
                     var culture = System.Globalization.CultureInfo.InvariantCulture;
                     followingError = float.TryParse(minimumDistance, System.Globalization.NumberStyles.Float, culture, out var min)
                         && float.TryParse(maximumDistance, System.Globalization.NumberStyles.Float, culture, out var max)
-                        && follow.ConfigureDistances(min, max) ? null : "Use finite min > combined hull radii, max > min.";
+                        && TryNumber(followingMaxSpeed, out var cap)
+                        && follow.ConfigureDistances(min, max, cap) ? null : "Use 0 <= min <= max, max > combined hull radii, maxSpeed >= 0.";
                 }
                 if (followingError != null) GUILayout.Label(followingError, hintStyle);
                 GUILayout.Label($"Active range: {follow.MinDistance:F1} - {follow.MaxDistance:F1} m", labelStyle);
                 GUILayout.Label($"Target: {follow.Speed / DiscreteAction.MetresPerSecondPerKnot:F1} knots | {follow.TrackingStatus}", labelStyle);
                 GUILayout.Label($"Range: {follow.Distance:F1} m | changing {follow.RangeRate:F2} m/s", labelStyle);
-                GUILayout.Label($"Elapsed: {follow.Elapsed:F1} / {follow.Scenario.duration_s:F0} s | in band: {(follow.Elapsed > 0 ? follow.InBandTime / follow.Elapsed : 0):P0}", labelStyle);
-                GUILayout.Label("Magenta: target/trail. Red/green: distance limits. Cyan: reference on the boat-target line.", hintStyle);
+                GUILayout.Label($"Bearing: {follow.RelativeBearing:F1} deg | allowed 90 - 270", labelStyle);
+                GUILayout.Label($"Elapsed: {follow.Elapsed:F1} / {follow.Scenario.duration_s:F0} s | rear sector: {(follow.TaskTime > 0 ? follow.FollowingTime / follow.TaskTime : 0):P0}", labelStyle);
+                GUILayout.Label($"Range only: {(follow.TaskTime > 0 ? follow.InBandTime / follow.TaskTime : 0):P0} | longest hold {follow.LongestFollowingTime:F1} s", labelStyle);
+                GUILayout.Label("Magenta: target/trail. Rear arcs: allowed region. Cyan cross: soft astern midpoint.", hintStyle);
             }
             else
             {

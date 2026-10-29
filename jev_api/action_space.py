@@ -1,4 +1,4 @@
-"""Task-specific grids: 64 navigation/following choices, 128 accompaniment choices."""
+"""Task-specific grids: 64 route choices, 128 following/accompaniment choices."""
 
 DIRECTIONS = ("north", "northeast", "east", "southeast",
               "south", "southwest", "west", "northwest")
@@ -8,6 +8,8 @@ ACCOMPANY_DIRECTIONS = ("north", "north_northeast", "northeast", "east_northeast
               "south", "south_southwest", "southwest", "west_southwest",
               "west", "west_northwest", "northwest", "north_northwest")
 ACCOMPANY_COURSES_DEG = tuple(j * 22.5 for j in range(len(ACCOMPANY_DIRECTIONS)))
+FOLLOWING_DIRECTIONS = ACCOMPANY_DIRECTIONS
+FOLLOWING_COURSES_DEG = ACCOMPANY_COURSES_DEG
 SPEED_FRACTIONS = (0, .05, .1, .2, .35, .5, .75, 1)
 
 ACTION_CHOICES = {
@@ -15,4 +17,7 @@ ACTION_CHOICES = {
 }
 ACCOMPANY_ACTION_CHOICES = {
     f"speed_{i}__{name}": (i, j) for i in range(8) for j, name in enumerate(ACCOMPANY_DIRECTIONS)
+}
+FOLLOWING_ACTION_CHOICES = {
+    f"speed_{i}__{name}": (i, j) for i in range(8) for j, name in enumerate(FOLLOWING_DIRECTIONS)
 }

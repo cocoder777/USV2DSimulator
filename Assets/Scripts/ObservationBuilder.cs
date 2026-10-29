@@ -55,9 +55,7 @@ public static class ObservationBuilder
         }
         foreach (JObject point in waypoints) point["routeSpeed"] = (double)point["routeSpeed"] / DiscreteAction.MetresPerSecondPerKnot;
         var observation = new JObject {
-            ["params"] = mission.IsAccompany ? mission.Accompany.Parameters() : mission.IsFollowing ? new JObject { ["platCode"] = ownPlatform,
-                ["targetPlatformId"] = FollowingTarget.PlatformId, ["minFollowingDistanceM"] = mission.Following.MinDistance,
-                ["maxFollowingDistanceM"] = mission.Following.MaxDistance } : new JObject {
+            ["params"] = mission.IsAccompany ? mission.Accompany.Parameters() : mission.IsFollowing ? mission.Following.Parameters() : new JObject {
                 ["platCode"] = ownPlatform, ["planRouteNum"] = mission.MapLevel,
                 ["currentRoute"] = Math.Max(0, mission.Progress.NextIndex - 1),
                 ["planWaypointNum"] = waypoints.Count, ["planWaypointList"] = waypoints },
@@ -82,6 +80,8 @@ public static class ObservationBuilder
                     ["obstacle_avoidance_radii_m"] = boat.GetComponent<DynamicObstacleField>()?.AvoidanceRadii() ?? new JObject() } }
         };
         if (mission.IsAccompany) observation["unity_only"]["target_reference_course_deg"] = mission.Accompany.Course;
+        if (mission.IsFollowing && mission.Following.Speed < 0.2f)
+            observation["unity_only"]["target_reference_course_deg"] = mission.Following.ReferenceCourse;
         if (!mission.HasMovingTarget) observation["unity_only"]["arrival_radius_m"] = route.arrival_radius_m;
         return observation;
     }

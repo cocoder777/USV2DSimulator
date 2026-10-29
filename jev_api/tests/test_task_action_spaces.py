@@ -1,4 +1,4 @@
-"""Prevent accompaniment's finer grid from changing the other tasks or STOP."""
+"""Route uses 64 choices; both target tasks and their STOP requests use 128."""
 
 import copy
 import unittest
@@ -23,7 +23,7 @@ class TaskActionSpaceTests(unittest.TestCase):
         accompany = adapted(cap=18)[2]['observation']
         # Switch repeatedly so a previously built accompaniment cannot change a later route.
         for original, count, step in ((observation(), 64, 45), (accompany, 128, 22.5),
-                                      (following, 64, 45), (observation(), 64, 45)):
+                                      (following, 128, 22.5), (observation(), 64, 45)):
             for operation in ('execute', 'stop'):
                 with self.subTest(code=original['task']['code'], operation=operation):
                     obs = copy.deepcopy(original)
@@ -40,7 +40,7 @@ class TaskActionSpaceTests(unittest.TestCase):
                         self.assertEqual(result['course'] % step, 0)
                     east = decode_action({'answers': {'action': {'type': 'choice', 'choice': 'speed_7__east'}}}, obs)
                     self.assertEqual(east['course'], 90)
-                    self.assertEqual(east['speed'], 18 if count == 128 else 50)
+                    self.assertEqual(east['speed'], 18 if obs['task']['code'] == 'accompanyMode' else 50)
                     fine = {'answers': {'action': {'type': 'choice', 'choice': 'speed_1__north_northeast'}}}
                     if count == 128:
                         self.assertEqual(decode_action(fine, obs)['course'], 22.5)

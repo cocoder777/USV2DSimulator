@@ -15,7 +15,7 @@ public sealed class MissionManager : MonoBehaviour
     public AccompanyTarget Accompany { get; private set; }
     public bool HasTask => IsAccompany ? Accompany?.Scenario != null : IsFollowing ? Following?.Scenario != null : Progress != null;
     public bool Completed => IsAccompany ? Accompany.Completed : IsFollowing ? Following.Completed : Progress != null && Progress.Completed;
-    public string TaskCode => IsAccompany ? "accompanyMode" : IsFollowing ? "targetFollowing" : "trackingMode";
+    public string TaskCode => IsAccompany ? "accompanyMode" : IsFollowing ? "followMode" : "trackingMode";
     [Tooltip("Empty uses the bundled StreamingAssets task. Absolute or project-relative paths are supported on desktop.")]
     public string routeFile = "";
     public int MapLevel { get; private set; }

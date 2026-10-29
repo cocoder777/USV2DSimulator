@@ -70,7 +70,7 @@ INSTRUCTIONS = (
     "Prefer faster useful progress when braking remains feasible; choosing a slower available speed needs a reason "
     "such as an active circle ceiling, braking distance, turning uncertainty or final parking. "
     "Travel fast when far enough away, aligned, and able to brake before the next circle; slow for turns or nearby targets. "
-    "Only eight compass courses are available, so an exact straight bearing may be unavailable. "
+    "Sixteen compass courses are available, so an exact straight bearing may be unavailable. "
     "Use adjacent courses that bracket the direct bearing when necessary, with timely small corrections rather than long "
     "off-bearing runs followed by large recovery turns. Hold a course only while its predicted motion remains useful. "
     "A course change after passing a waypoint is appropriate for the next leg; do not turn early toward a future point. "
@@ -114,11 +114,9 @@ def _candidate_facts(
     boat = observation["boat"]
     execution = observation["execution"]
     speed = boat["targetSpeed"] * KNOT_MPS
-    course = boat["targetCourse"]
     duration = observation["planning"]["action_duration_s"]
     motion = predict_ground_motion(
         speed,
-        course,
         target_speed,
         target_course,
         execution, duration,
@@ -128,7 +126,6 @@ def _candidate_facts(
     horizon = preview_duration(execution, duration, speed)
     future = predict_ground_motion(
         speed,
-        course,
         target_speed,
         target_course,
         execution, horizon, dt=max(0.1, execution["fixed_dt_s"]),
@@ -199,7 +196,7 @@ def _describe_candidate(command, effect, duration, distance, limit, previous_lim
     if effect["passing_speed_above_ceiling"] or effect.get("previous_circle_speed_above_ceiling", False):
         text += "SPEED VIOLATION predicted during this action. Avoid; if unavoidable, brake to minimize excess. "
     text += (
-        f"Set target ground speed {command['speed_mps']:.3f} m/s, absolute course {command['absolute_course_deg']:.0f} degrees ({command['direction']}). "
+        f"Set target ground speed {command['speed_mps']:.3f} m/s, absolute course {command['absolute_course_deg']:.1f} degrees ({command['direction']}). "
         f"Approximate motion over {duration:.3f} s: midpoint {effect['midpoint']}; endpoint {effect['endpoint']}; end speed {effect['end_speed_mps']:.3f} m/s. "
         f"End course {effect['end_course_deg']:.3f} deg; yaw {effect['end_yaw_rate_deg_s']:.3f} deg/s. "
         f"Target distance {distance:.3f} -> {effect['end_checkpoint_distance_m']:.3f} m; distance reduction {effect['distance_reduction_m']:.3f} m. "
@@ -332,6 +329,7 @@ def build_payload(observation, model="jev-latest"):
         else None
     )
     criteria = {}
+    policies = {}
     for name, (i, j) in ACTION_CHOICES.items():
         candidate = _candidate_facts(
             observation,
@@ -344,7 +342,7 @@ def build_payload(observation, model="jev-latest"):
             active_previous,
             obstacles,
         )
-        criteria[name] = _describe_candidate(
+        text = _describe_candidate(
             candidate["command"],
             candidate["approximate_effect"],
             duration,
@@ -352,6 +350,17 @@ def build_payload(observation, model="jev-latest"):
             limit,
             previous_limit,
         )
+        # Share the exact existing policy paragraphs, retaining every candidate's distinct facts/warnings.
+        for policy, marker in (
+            ('bypass', 'Choose this movement to start or continue an EARLY bypass'),
+            ('transit', 'Choose when this movement respects active circle ceilings')):
+            prefix, found, suffix = text.partition(marker)
+            if found:
+                policies[policy] = found + suffix
+                text = prefix + 'Apply candidate_policies.' + policy + '.'
+                break
+        criteria[name] = text
+    state['candidate_policies'] = policies
     return {
         "model": model,
         "state": state,

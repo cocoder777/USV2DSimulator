@@ -32,7 +32,7 @@ def bounded_turn(delta, initial_yaw, maximum_yaw, acceleration, t):
     return direction * angle, direction * velocity
 
 
-def predict_ground_motion(speed_mps, course_deg, target_speed_mps, target_course_deg, execution, duration, dt=None, *, route_details=True):
+def predict_ground_motion(speed_mps, target_speed_mps, target_course_deg, execution, duration, dt=None, *, route_details=True):
     """Integrate at the plant timestep, including measured angular state at rest."""
     dt = execution["fixed_dt_s"] if dt is None else dt
     if not math.isfinite(duration) or duration <= 0 or not math.isfinite(dt) or dt <= 0:

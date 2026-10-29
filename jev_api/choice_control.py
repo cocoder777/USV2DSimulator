@@ -1,4 +1,4 @@
-"""Public model-request entry, shared 64 Choices and action decoding."""
+"""Public model-request entry, shared 128 Choices and action decoding."""
 
 from action_space import ACTION_CHOICES, DIRECTIONS
 from tasks.registry import build_payload as build_task_payload

@@ -2,6 +2,7 @@
 
 import copy
 import json
+import math
 import unittest
 
 import test_navigation as navigation
@@ -54,7 +55,7 @@ class AccompanyTests(unittest.TestCase):
         _, _, request = adapted(stationary=True)
         obs = request['observation']
         obs['boat'].update(targetSpeed=-1, targetCourse=180)
-        self.assertAlmostEqual(AccompanyGeometry(obs).current['relative_along_mps'], -KNOT_MPS)
+        self.assertAlmostEqual(AccompanyGeometry(obs).current['along_rate_mps'], -KNOT_MPS)
 
     def test_task_cap_generates_all_eight_speed_bins(self):
         for cap, maximum in ((0, 50), (18, 18), (100, 50)):
@@ -76,12 +77,12 @@ class AccompanyTests(unittest.TestCase):
             for candidate in choices.values():
                 facts = json.loads(candidate)
                 self.assertEqual('heading_error_deg' in facts, bool(sync))
-                self.assertNotIn('preview', candidate)
+                self.assertEqual(len(facts['position_m']), 3)
+                self.assertGreater(facts['min_clearance_m'], 0)
             equal_speed = json.loads(choices['speed_3__north'])
-            self.assertTrue(equal_speed['in_position'])
-            self.assertAlmostEqual(equal_speed['position_error_m'], 0)
-            self.assertAlmostEqual(equal_speed['relative_along_mps'], 0)
-            self.assertAlmostEqual(equal_speed['relative_across_mps'], 0)
+            self.assertEqual(equal_speed['position_m'][0], [-150, 80])
+            self.assertEqual(equal_speed['end_rate_mps'], [0, 0])
+            self.assertEqual(equal_speed['preview_rate_mps'], [0, 0])
 
     def test_static_target_uses_supplied_reference_without_history(self):
         task, records = wire(stationary=True)
@@ -104,9 +105,98 @@ class AccompanyTests(unittest.TestCase):
         for name in ACTION_CHOICES:
             a = json.loads(mps['questions']['action']['criteria'][name])
             b = json.loads(knots['questions']['action']['criteria'][name])
-            for key in ('along_m', 'across_m', 'position_error_m', 'heading_error_deg'):
+            for key in ('position_m', 'min_clearance_m', 'heading_error_deg'):
                 self.assertEqual(a[key], b[key])
-            self.assertAlmostEqual(a['relative_along_mps']/KNOT_MPS, b['relative_along_knots'], delta=.0015)
+            for va, vb in zip(a['preview_rate_mps'], b['preview_rate_knots']):
+                self.assertAlmostEqual(va/KNOT_MPS, vb, delta=.0015)
+
+    def test_rotating_frame_requires_offset_velocity(self):
+        from geometry.accompany import AccompanyGeometry
+        _, _, request = adapted()
+        obs = request['observation']
+        obs['task']['target_motion'] = dict(yaw_deg_s=2, acceleration_mps2=0)
+        g = AccompanyGeometry(obs)
+        a, b = g.current['along_m'], g.current['across_m']
+        omega = math.radians(2)
+        # North-facing target: forward is north, starboard is east.
+        velocity = (omega*a, g.target_speed-omega*b)
+        rates = g.frame_rates(g.relative_position, velocity, 0)
+        self.assertAlmostEqual(rates['along_rate_mps'], 0, places=8)
+        self.assertAlmostEqual(rates['across_rate_mps'], 0, places=8)
+        uncorrected = g.frame_rates(g.relative_position, (0, g.target_speed), 0)
+        self.assertGreater(math.hypot(*uncorrected.values()), 5)
+        self.assertAlmostEqual(g.guidance(12)['course_deg'], 294.18881431966855, places=4)
+        # Target's observed turn predicts a circular arc, not the tangent line.
+        position, course, speed = g.target_at(10)
+        self.assertAlmostEqual(course, 20)
+        self.assertAlmostEqual(speed, g.target_speed)
+        self.assertAlmostEqual(position[0], g.target_speed/omega*(1-math.cos(omega*10)), delta=.001)
+
+    def test_motion_estimation_uses_simulation_ticks_and_resets(self):
+        task, records = wire()
+        adapter = UnitySnapshotAdapter('mps')
+        adapter.add_task(task, TASK)
+        for record in records: adapter.add_situation(record)
+        adapter.ready()
+        next_task = copy.deepcopy(task)
+        next_task['unity_only'].update(decision_id='next', tick=50, situation_timestamp=124)
+        adapter.add_task(next_task, TASK)
+        for record in records:
+            r = dict(record, timestamp=124)
+            if r['platformId'] == 3001: r['targetCourse'] = 2
+            adapter.add_situation(r)
+        obs = adapter.ready()[0][1]['observation']
+        yaw = obs['task']['target_motion']['yaw_deg_s']
+        self.assertGreater(yaw, 1)
+        self.assertLessEqual(yaw, 2)
+        # Independent adapter/episode has no previous motion estimate.
+        _, _, fresh = adapted()
+        self.assertEqual(fresh['observation']['task']['target_motion']['yaw_deg_s'], 0)
+
+    def test_near_band_recovery_remains_a_position_objective(self):
+        _, _, request = adapted(1)
+        obs = request['observation']
+        lon, lat = geo(11.3, -19.4)  # own at along=-169.4, across=91.3
+        obs['boat'].update(longitude=lon, latitude=lat)
+        payload = build_payload(obs)
+        self.assertEqual(payload['state']['task']['stage'], 'acquire_position')
+        self.assertFalse(payload['state']['heading_sync']['active'])
+        self.assertEqual(list(payload['questions']['action']['criteria']), list(ACTION_CHOICES))
+        choices = payload['questions']['action']['criteria']
+        matching = json.loads(choices['speed_3__north'])
+        correcting = json.loads(choices['speed_4__north_northwest'])
+        self.assertAlmostEqual(matching['control_gain_m'], 0, delta=.001)
+        self.assertGreater(correcting['control_gain_m'], 0)
+        self.assertNotIn('heading_error_deg', correcting)
+        self.assertEqual(len(correcting['band_error_m']), 3)
+
+    def test_interior_reference_does_not_change_customer_position_status(self):
+        task, adapter, request = adapted(1)
+        obs = request['observation']
+        lon, lat = geo(7, -7)  # along=-157, across=87: in customer band, outside middle half
+        obs['boat'].update(longitude=lon, latitude=lat)
+        payload = build_payload(obs)
+        self.assertTrue(payload['state']['relative']['in_position'])
+        self.assertFalse(payload['state']['relative']['in_control_region'])
+        self.assertEqual(payload['state']['task']['control_along_m'], [-155, -145])
+        self.assertEqual(payload['state']['task']['control_across_m'], [75, 85])
+        self.assertEqual(payload['state']['task']['stage'], 'acquire_position')
+        status = status_content(task, 1, 'accompanying', adapter.tasks, observation=obs)
+        self.assertEqual(status['params']['inPosition'], 1)
+        self.assertEqual(status['params']['alongOutM'], 0)
+        self.assertEqual(status['params']['acrossOutM'], 0)
+
+    def test_static_reference_has_no_spurious_direction_at_control_boundary(self):
+        from geometry.accompany import AccompanyGeometry
+        _, _, request = adapted(1, stationary=True)
+        obs = request['observation']
+        lon, lat = geo(5.02, 0)  # along=-150, across=85.02, within observation tolerance
+        obs['boat'].update(longitude=lon, latitude=lat)
+        g = AccompanyGeometry(obs)
+        self.assertTrue(g.current['in_position'])
+        self.assertTrue(g.current['in_control_region'])
+        self.assertEqual(g.current['control_error_m'], 0)
+        self.assertIsNone(g.guidance(12)['course_deg'])
 
     def test_current_status_and_stop_keep_customer_code_and_parameters(self):
         task, adapter, request = adapted(1, 18)

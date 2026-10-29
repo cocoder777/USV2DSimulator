@@ -8,7 +8,7 @@ using UnityEngine;
 public sealed class AccompanyTarget : MonoBehaviour
 {
     public const int PlatformId = 3001;
-    public static readonly string[] ScenarioNames = { "Straight", "Gentle turn", "Speed / stop", "Stationary" };
+    public static readonly string[] ScenarioNames = { "Straight", "Gentle turn", "Speed / stop", "Irregular" };
     public FollowingScenarioData Scenario { get; private set; }
     public int ScenarioIndex { get; private set; }
     public float AlongMin { get; private set; } = -160;
@@ -75,25 +75,89 @@ public sealed class AccompanyTarget : MonoBehaviour
         float across = (AcrossMin + AcrossMax) / 2;
         across = across >= 0 ? AcrossMax + 80 : AcrossMin - 80;
         var initial = f * along + right * across;
+        // A sustained turn must exercise more than a complete revolution after acquisition.
+        float duration = index == 1 ? Mathf.Max(DurationSeconds, 360)
+            : index == 3 ? Mathf.Max(DurationSeconds, 240) : DurationSeconds;
+        float targetSpeed = TargetSpeedKnots;
+        float targetAcceleration = 1.46f, targetDeceleration = 1.75f;
         var segments = new List<FollowingScenarioData.Segment> {
-            new() { start_s = 0, speed_knots = index == 3 ? 0 : TargetSpeedKnots, yaw_rate_deg_s = 0 }
+            new() { start_s = 0, speed_knots = targetSpeed, yaw_rate_deg_s = 0 }
         };
-        if (index == 1) segments.Add(new() { start_s = DurationSeconds * .4f, speed_knots = TargetSpeedKnots, yaw_rate_deg_s = 2 });
+        if (index == 1) segments.Add(new() { start_s = Mathf.Min(48, duration * .4f), speed_knots = TargetSpeedKnots, yaw_rate_deg_s = 2 });
         if (index == 2)
         {
             segments.Add(new() { start_s = DurationSeconds * .35f, speed_knots = TargetSpeedKnots * .6f });
             segments.Add(new() { start_s = DurationSeconds * .6f, speed_knots = 0 });
             segments.Add(new() { start_s = DurationSeconds * .8f, speed_knots = TargetSpeedKnots });
         }
+        if (index == 3)
+        {
+            float ownLimit = boat.maxForwardSpeed;
+            if (MaxSpeedKnots > 0) ownLimit = Mathf.Min(ownLimit, MaxSpeedKnots * DiscreteAction.MetresPerSecondPerKnot);
+            targetSpeed = Mathf.Min(TargetSpeedKnots, 8, ownLimit * .45f / DiscreteAction.MetresPerSecondPerKnot);
+            targetAcceleration = Mathf.Min(.1f, boat.maxAcceleration * .15f);
+            targetDeceleration = Mathf.Min(.1f, boat.maxDeceleration * .15f);
+            float maxAlong = Mathf.Max(Mathf.Abs(AlongMin), Mathf.Abs(AlongMax));
+            float maxAcross = Mathf.Max(Mathf.Abs(AcrossMin), Mathf.Abs(AcrossMax));
+            float radiusSquared = maxAlong * maxAlong + maxAcross * maxAcross;
+            float radius = Mathf.Sqrt(radiusSquared);
+            float u = targetSpeed * DiscreteAction.MetresPerSecondPerKnot;
+            // Bound the speed of every offset point in either turn direction, not just the target speed.
+            // |v_offset|^2 <= u^2 + 2*u*|yaw|*maxAcross + yaw^2*radiusSquared.
+            float budget = ownLimit * .9f;
+            float yawBudget = (Mathf.Sqrt(u*u*maxAcross*maxAcross + radiusSquared*(budget*budget-u*u))
+                - u*maxAcross) / radiusSquared * Mathf.Rad2Deg;
+            float maximumYaw = Mathf.Min(2, boat.maxYawRateDeg * .25f, yawBudget);
+            float yawAcceleration = Mathf.Min(.14f, boat.maxAngularAccelerationDeg * .1f,
+                .35f * Mathf.Min(boat.maxAcceleration, boat.maxDeceleration) / radius * Mathf.Rad2Deg);
+            segments = BuildIrregularSegments(duration, targetSpeed, maximumYaw, yawAcceleration);
+        }
         return new FollowingScenarioData {
-            scenario_id = "accompany_" + index, duration_s = DurationSeconds,
+            scenario_id = "accompany_" + index, duration_s = duration,
             initial_state = new TargetRouteData.InitialState { x = initial.x, y = initial.y,
                 heading_deg = 90 - InitialReferenceCourse, speed = 0, yaw_rate_deg = 0 },
             target = new FollowingScenarioData.Target { x = 0, y = 0, radius_m = 6,
-                course_deg = InitialReferenceCourse, speed_knots = index == 3 ? 0 : TargetSpeedKnots,
-                acceleration_mps2 = 1.46f, deceleration_mps2 = 1.75f },
+                course_deg = InitialReferenceCourse, speed_knots = targetSpeed,
+                acceleration_mps2 = targetAcceleration, deceleration_mps2 = targetDeceleration },
             segments = segments.ToArray(), obstacles = Array.Empty<FollowingScenarioData.Obstacle>()
         };
+    }
+
+    private static List<FollowingScenarioData.Segment> BuildIrregularSegments(
+        float duration, float maximumSpeed, float maximumYaw, float yawAcceleration)
+    {
+        // Repeatable irregular manoeuvres, private to Unity; never exposed as future model input.
+        var random = new System.Random(20261028);
+        var segments = new List<FollowingScenarioData.Segment>();
+        float elapsed = 0, yaw = 0;
+        int turnSign = -1;
+        void Add(float span, float speed, float rate)
+        {
+            if (span <= 0 || elapsed >= duration) return;
+            float next = Mathf.Min(duration, elapsed + span);
+            if (next <= elapsed) return;
+            segments.Add(new() { start_s = elapsed, speed_knots = speed, yaw_rate_deg_s = rate });
+            elapsed = next;
+        }
+        Add(Mathf.Min(40, duration), maximumSpeed, 0);
+        while (elapsed < duration)
+        {
+            if (random.NextDouble() < .8) turnSign = -turnSign;
+            float desiredYaw = turnSign * maximumYaw * (.55f + .45f * (float)random.NextDouble());
+            float speed = maximumSpeed * (.75f + .25f * (float)random.NextDouble());
+            float ramp = Mathf.Abs(desiredYaw-yaw) / yawAcceleration;
+            float rampElapsed = 0;
+            while (rampElapsed < ramp && elapsed < duration)
+            {
+                float step = Mathf.Min(.5f, ramp-rampElapsed, duration-elapsed);
+                if (step <= 0) break;
+                Add(step, speed, Mathf.Lerp(yaw, desiredYaw, (rampElapsed + step*.5f)/ramp));
+                rampElapsed += step;
+            }
+            yaw = desiredYaw;
+            Add(8 + 10*(float)random.NextDouble(), speed, yaw);
+        }
+        return segments;
     }
 
     public void Load(FollowingScenarioData scenario, int index) { Scenario = scenario; ScenarioIndex = index; }

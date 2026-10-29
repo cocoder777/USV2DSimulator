@@ -12,7 +12,8 @@ public static class DiscreteAction
 {
     public const float MetresPerSecondPerKnot = 1852f / 3600f;
     public static readonly float[] SpeedFractions = { 0, 0.05f, 0.1f, 0.2f, 0.35f, 0.5f, 0.75f, 1f };
-    public static readonly float[] CoursesDeg = { 0, 45, 90, 135, 180, 225, 270, 315 };
+    public static readonly float[] CoursesDeg = { 0, 22.5f, 45, 67.5f, 90, 112.5f, 135, 157.5f,
+        180, 202.5f, 225, 247.5f, 270, 292.5f, 315, 337.5f };
     public static void Validate(DiscreteBoatAction action)
     {
         if (action == null || !BoatDynamics2D.IsFinite(action.speed) || action.speed < 0

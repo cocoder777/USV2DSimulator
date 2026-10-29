@@ -94,7 +94,7 @@ def valid_request(packet):
         speeds, courses = space["speeds_knots"], space["courses_deg"]
         if (
             len(speeds) != 8
-            or len(courses) != 8
+            or len(courses) != 16
             or not all(finite(v) and v >= 0 for v in speeds)
             or not all(finite(v) and 0 <= v < 360 for v in courses)
         ):

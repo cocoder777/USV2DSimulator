@@ -17,7 +17,7 @@ from protocol.frames import TASK, STOP
 from protocol.status import status_content
 from protocol.frames import STATUS, json_packets, Reassembler
 from geometry.relative_motion import moving_range, relative_facts, line_reference_facts, course_error
-COURSES_DEG = tuple(range(0,360,45))
+COURSES_DEG = tuple(j * 22.5 for j in range(16))
 
 ROOT = Path(__file__).resolve().parents[2]
 ORIGIN = [120.5, 30.2]
@@ -59,6 +59,14 @@ def packet(obs=None):
                 decision_id="d", tick=0, observation=obs or observation())
 
 
+def following_facts(payload, name):
+    facts = json.loads(payload['questions']['action']['criteria'][name])
+    if 'values' in facts:
+        values = facts.pop('values')
+        facts.update(zip(payload['state']['candidate_value_columns'], values))
+    return facts
+
+
 class NavigationTests(unittest.TestCase):
     def test_geographic_roundtrip(self):
         for actual, expected in zip(xy(geo(1000, 2000), ORIGIN), (1000, 2000)):
@@ -66,12 +74,12 @@ class NavigationTests(unittest.TestCase):
 
     def test_global_cardinal_motion(self):
         for course, expected in [(0, (0, 2)), (90, (2, 0)), (180, (0, -2)), (270, (-2, 0))]:
-            m = predict_ground_motion(2, course, 2, course, execution(course), 1)
+            m = predict_ground_motion(2, 2, course, execution(course), 1)
             for a, b in zip(m["endpoint"], expected):
                 self.assertAlmostEqual(a, b, places=5)
 
     def test_unknown_course_at_rest_uses_actual_heading(self):
-        a = predict_ground_motion(0, None, 25, 0, execution(90), 1)
+        a = predict_ground_motion(0, 25, 0, execution(90), 1)
         self.assertGreater(a["endpoint"][0], 0.72)
         self.assertLess(abs(a["endpoint"][1]), 0.03)
         p = build_payload(observation())
@@ -84,17 +92,17 @@ class NavigationTests(unittest.TestCase):
         self.assertNotIn("route", payload["state"])
         self.assertNotIn("reference_lon_lat", json.dumps(payload))
         self.assertAlmostEqual(payload["state"]["target"]["distance_m"], 400, places=3)
-        self.assertEqual(len(payload["questions"]["action"]["criteria"]), 64)
+        self.assertEqual(len(payload["questions"]["action"]["criteria"]), 128)
 
     def test_all_choices_decode_global_physical_commands(self):
         obs = observation()
         for name, (i, j) in ACTION_CHOICES.items():
             result = decode_action({"answers": {"action": {"type": "choice", "choice": name}}}, obs)
-            self.assertEqual(result, {"speed": obs["action_space"]["speeds_knots"][i], "course": j * 45})
+            self.assertEqual(result, {"speed": obs["action_space"]["speeds_knots"][i], "course": j * 22.5})
         with self.assertRaises(ValueError):
             decode_action({"answers": {"action": {"type": "choice", "choice": "bad"}}}, obs)
 
-    def test_original_64_choices_and_explicit_risk_descriptions(self):
+    def test_all_128_choices_and_explicit_risk_descriptions(self):
         obs=observation()
         obs["model_speed_unit"]="knots"
         obs["task"]["next_waypoint_index"]=1
@@ -103,9 +111,9 @@ class NavigationTests(unittest.TestCase):
         obs["obstacles"]=[dict(id="target",longitude=previous["routeLon"],latitude=previous["routeLat"],
                                radius_m=12,avoidance_radius_m=90,targetSpeed=1,targetCourse=0)]
         payload=build_payload(obs)
-        self.assertEqual(len(payload["questions"]["action"]["criteria"]),64)
+        self.assertEqual(len(payload["questions"]["action"]["criteria"]),128)
         self.assertNotIn("candidate_legend",payload["state"])
-        self.assertNotIn("speed_1__north_northeast",ACTION_CHOICES)
+        self.assertIn("speed_1__north_northeast",ACTION_CHOICES)
         self.assertTrue(all("COLLISION RISK"in text and "AVOIDANCE SAFETY CIRCLE WARNING"in text
                             for text in payload["questions"]["action"]["criteria"].values()))
 
@@ -168,15 +176,15 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(build_payload(obs)["state"]["task"]["stage"], "final_parking")
 
     def test_acceleration_and_asymmetric_braking(self):
-        a = predict_ground_motion(0, None, 50*KNOT_MPS, 90, execution(), 1)
+        a = predict_ground_motion(0, 50*KNOT_MPS, 90, execution(), 1)
         self.assertAlmostEqual(a["end_speed"], 1.46)
         self.assertAlmostEqual(a["endpoint"][0], 0.73)
-        b = predict_ground_motion(10, 90, 0, 270, execution(), 1)
+        b = predict_ground_motion(10, 0, 270, execution(), 1)
         self.assertAlmostEqual(b["end_speed"], 8.25)
         self.assertAlmostEqual(b["endpoint"][0], 9.125)
 
     def test_target_reached_without_speed_overshoot(self):
-        m = predict_ground_motion(0, None, 0.73, 90, execution(), 1)
+        m = predict_ground_motion(0, 0.73, 90, execution(), 1)
         self.assertAlmostEqual(m["end_speed"], 0.73)
         self.assertAlmostEqual(m["endpoint"][0], 0.5475, places=4)
         self.assertEqual(len(m["path"]), 51)
@@ -184,7 +192,7 @@ class NavigationTests(unittest.TestCase):
 
     def test_full_speed_stopping_distance_and_braking_advice(self):
         speed = 50*KNOT_MPS
-        m = predict_ground_motion(speed, 90, 0, 90, execution(), 16)
+        m = predict_ground_motion(speed, 0, 90, execution(), 16)
         self.assertEqual(m["end_speed"], 0)
         self.assertAlmostEqual(m["endpoint"][0], speed**2/(2*1.75), places=4)
         facts = braking_facts(speed, execution(), 0)
@@ -208,11 +216,11 @@ class NavigationTests(unittest.TestCase):
 
     def test_repeated_command_continues_angular_state(self):
         state = execution(90, -5)
-        full = predict_ground_motion(5, 90, 10, 0, state, 2)
-        first = predict_ground_motion(5, 90, 10, 0, state, 1)
+        full = predict_ground_motion(5, 10, 0, state, 2)
+        first = predict_ground_motion(5, 10, 0, state, 1)
         following = dict(state, heading_course_deg=first["end_course_deg"], yaw_rate_deg_s=first["end_yaw_rate_deg_s"],
                          active_target_course_deg=0, active_course_error_deg=-first["end_course_deg"])
-        second = predict_ground_motion(first["end_speed"], first["end_course_deg"], 10, 0, following, 1)
+        second = predict_ground_motion(first["end_speed"], 10, 0, following, 1)
         for i in range(2):
             self.assertAlmostEqual(first["endpoint"][i] + second["endpoint"][i], full["endpoint"][i], places=6)
 
@@ -222,15 +230,15 @@ class NavigationTests(unittest.TestCase):
     def test_following_omits_only_unused_route_details(self):
         for heading, yaw, target_speed, course in [(180, 0, 3, 0), (359, -4, 0, 90), (0, 8, 12, 315)]:
             state = execution(heading, yaw)
-            full = predict_ground_motion(5, heading, target_speed, course, state, 1.03)
-            lean = predict_ground_motion(5, heading, target_speed, course, state, 1.03, route_details=False)
+            full = predict_ground_motion(5, target_speed, course, state, 1.03)
+            lean = predict_ground_motion(5, target_speed, course, state, 1.03, route_details=False)
             self.assertEqual(lean, {k: v for k, v in full.items() if k not in ('midpoint', 'path_speeds')})
             self.assertIn('midpoint', full)
             self.assertEqual(len(full['path']), len(full['path_speeds']))
 
     def test_braking_ignores_requested_course(self):
-        self.assertEqual(predict_ground_motion(2, 90, 0, 0, execution(90, 4), 1),
-                         predict_ground_motion(2, 90, 0, 270, execution(90, 4), 1))
+        self.assertEqual(predict_ground_motion(2, 0, 0, execution(90, 4), 1),
+                         predict_ground_motion(2, 0, 270, execution(90, 4), 1))
 
     def test_snapshot_adapter_preserves_units_and_complete_manifest(self):
         obs = observation()
@@ -294,7 +302,7 @@ class NavigationTests(unittest.TestCase):
                 self.assertNotIn("Choose this movement to start", criteria[name])
         self.assertIn("nonzero safe bypass", payload["questions"]["action"]["instructions"])
         self.assertNotIn("SAFETY CIRCLE WARNING", criteria["speed_1__south"])
-        self.assertEqual(len(criteria), 64)
+        self.assertEqual(len(criteria), 128)
 
     def test_all_maps_request_validation_and_units(self):
         for level in range(5):
@@ -324,8 +332,8 @@ class FollowingTests(unittest.TestCase):
         knots = build_payload(obs)
         self.assertEqual(list(knots['questions']['action']['criteria']), list(ACTION_CHOICES))
         for name in ACTION_CHOICES:
-            a = json.loads(mps['questions']['action']['criteria'][name])
-            b = json.loads(knots['questions']['action']['criteria'][name])
+            a = following_facts(mps, name)
+            b = following_facts(knots, name)
             self.assertEqual(a['range_m'], b['range_m'])
             self.assertEqual(a['warnings'], b['warnings'])
             self.assertAlmostEqual(a['speed_mps']/KNOT_MPS, b['speed_knots'], delta=.000501)
@@ -366,10 +374,10 @@ class FollowingTests(unittest.TestCase):
         self.assertEqual(obs["target"]["platformId"], 3001)
         self.assertEqual([o["platformId"] for o in obs["obstacles"]], [2001])
         payload = build_payload(obs)
-        self.assertEqual(len(payload["questions"]["action"]["criteria"]), 64)
+        self.assertEqual(len(payload["questions"]["action"]["criteria"]), 128)
         self.assertAlmostEqual(payload["state"]["relative"]["distance_m"], 150)
         self.assertAlmostEqual(payload["state"]["relative"]["range_rate_mps"], 0)
-        facts = json.loads(payload["questions"]["action"]["criteria"]["speed_3__north"])
+        facts = following_facts(payload, "speed_3__north")
         self.assertEqual(facts["range_m"][0], 150)
         self.assertEqual(facts["reference_error_m"], [0, 0])
         self.assertNotIn("rear_reference", payload["state"])
@@ -422,7 +430,7 @@ class FollowingTests(unittest.TestCase):
         self.assertNotIn("recover/maintain", result["questions"]["action"]["instructions"])
         self.assertIn("NONZERO_NOT_STOP", json.loads(result["questions"]["action"]["criteria"]["speed_3__north"])["warnings"])
         self.assertIn("target", result["state"])
-        self.assertEqual(len(result["questions"]["action"]["criteria"]), 64)
+        self.assertEqual(len(result["questions"]["action"]["criteria"]), 128)
 
     def test_status_preserves_wire_identity_and_task_specific_params(self):
         task, _ = self.wire()
@@ -484,14 +492,14 @@ class FollowingTests(unittest.TestCase):
         self.assertEqual(payload["state"]["range_recovery"]["signed_heading_error_deg"], -180)
         self.assertTrue(payload["state"]["range_recovery"]["own_motion_points_away"])
         criteria = payload["questions"]["action"]["criteria"]
-        self.assertEqual(len(criteria), 64)
+        self.assertEqual(len(criteria), 128)
         self.assertIn("COMMAND_POINTS_AWAY", json.loads(criteria["speed_5__south"])["warnings"])
         self.assertNotIn("COMMAND_POINTS_AWAY", json.loads(criteria["speed_5__north"])["warnings"])
         self.assertIn("turn_error_deg", json.loads(criteria["speed_5__north"]))
         self.assertIn("NO_REORIENTATION", json.loads(criteria["speed_0__north"])["warnings"])
         # Short-action range barely distinguishes a useful turn from going away.
-        forward = predict_ground_motion(25*KNOT_MPS, 180, 25*KNOT_MPS, 180, execution(180), 1)
-        turning = predict_ground_motion(25*KNOT_MPS, 180, 25*KNOT_MPS, 0, execution(180), 1)
+        forward = predict_ground_motion(25*KNOT_MPS, 25*KNOT_MPS, 180, execution(180), 1)
+        turning = predict_ground_motion(25*KNOT_MPS, 25*KNOT_MPS, 0, execution(180), 1)
         for motion in (forward, turning): motion["sample_dt_s"] = .02
         a = moving_range(forward, (0, 300), (0, 10*KNOT_MPS), 1)[2]
         b = moving_range(turning, (0, 300), (0, 10*KNOT_MPS), 1)[2]
@@ -544,7 +552,7 @@ class FollowingTests(unittest.TestCase):
         self.assertIn("actively MOVE AWAY", question["instructions"])
         self.assertIn("TARGET_COLLISION", json.loads(question["criteria"]["speed_0__south"])["warnings"])
         self.assertNotIn("TARGET_COLLISION", json.loads(question["criteria"]["speed_4__south"])["warnings"])
-        self.assertEqual(len(question["criteria"]), 64)
+        self.assertEqual(len(question["criteria"]), 128)
 
 
 if __name__ == "__main__":

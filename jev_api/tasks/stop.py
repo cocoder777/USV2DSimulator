@@ -3,12 +3,13 @@
 from geometry.coordinates import KNOT_MPS
 from geometry.motion import predict_ground_motion, braking_facts, preview_duration
 from geometry.obstacles import nearby_obstacles
-from action_space import ACTION_CHOICES, DIRECTIONS
 from tasks.presentation import position_text, describe_clearance, add_obstacle_state, AVOIDANCE_INSTRUCTIONS
 
 
 def build_waypoint_stop_payload(observation, model="jev-latest"):
-    """立即停车任务；复用原 128 个 Choice 和解码，不依赖航路点。"""
+    """立即停车，沿用所属任务的候选网格，不依赖航路点。"""
+    from tasks.registry import get_task
+    task_module = get_task(observation["task"]["code"])
     boat = observation["boat"]
     duration = observation["planning"]["action_duration_s"]
     execution = observation["execution"]
@@ -16,7 +17,7 @@ def build_waypoint_stop_payload(observation, model="jev-latest"):
     course = boat["targetCourse"]
     criteria = {}
     obstacles = nearby_obstacles(observation)
-    for name, (i, j) in ACTION_CHOICES.items():
+    for name, (i, j) in task_module.ACTION_CHOICES.items():
         target_speed = observation["action_space"]["speeds_knots"][i] * KNOT_MPS
         target_course = observation["action_space"]["courses_deg"][j]
         motion = predict_ground_motion(
@@ -25,7 +26,7 @@ def build_waypoint_stop_payload(observation, model="jev-latest"):
         )
         criteria[name] = (
             f"Set target ground speed {target_speed:.3f} m/s, absolute course "
-            f"{target_course:.1f} degrees ({DIRECTIONS[j]}). "
+            f"{target_course:.1f} degrees ({task_module.DIRECTIONS[j]}). "
             f"Approximate motion over {duration:.3f} s: endpoint "
             f"{position_text(motion['endpoint'])}; end speed {motion['end_speed']:.3f} m/s. "
             + ("Zero target speed brakes over time; the simulator ignores the requested course and cancels residual yaw within angular limits. "
@@ -66,7 +67,7 @@ def build_waypoint_stop_payload(observation, model="jev-latest"):
                     "Stopping has no position or arrival-circle requirement. "
                     "The simulator ignores the course of a zero-speed command and brakes at the configured maximum deceleration; "
                     "this does not instantly set actual speed to zero. "
-                    "All original 128 choices remain available; no local controller chooses for you."
+                    f"All original {len(task_module.ACTION_CHOICES)} choices remain available; no local controller chooses for you."
                 ),
                 "criteria": criteria,
             }

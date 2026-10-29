@@ -1,14 +1,14 @@
 """Existing line-of-sight distance task; not the customer followMode."""
 
 import math
-from action_space import ACTION_CHOICES
+from action_space import ACTION_CHOICES, COURSES_DEG
 from geometry.coordinates import KNOT_MPS, xy
 from geometry.motion import predict_ground_motion, preview_duration, braking_facts
 from geometry.obstacles import nearby_obstacles, clearance_facts
 from geometry.relative_motion import direction, velocity, relative_facts, line_reference_facts, course_error, moving_range
 from tasks.stop import following_stop_objective
 
-# Shared schema/rules replace prose repeated for each of the 128 choices.
+# Shared schema/rules replace prose repeated for each of the 64 choices.
 CANDIDATE_SCHEMA = {
     "units": "Distances m; angles deg clockwise from north; yaw deg/s. Speed and range_rate use state.units.speed (m/s if units absent).",
     "speed_course": "speed_mps/speed_knots and course_deg are commands; end_motion contains actual end speed/course/yaw. A zero-speed command ignores course and brakes over time.",
@@ -197,7 +197,7 @@ def build_payload(obs, model="jev-latest"):
         "If target stops, settle safely within the band. No particular rear direction is required. "
         "If already outside a bound, choose a safe recovery; every minimum includes the initial state, so compare end range/range rate. "
         "Other obstacle forecasts freeze their current positions. Preserve their configured hull/safety clearance; safe detours may temporarily lose spacing. "
-        "Code only computes facts; all original 128 choices remain available to you."
+        "Code only computes facts; all original 64 choices remain available to you."
     )
     if stopping:
         instructions = following_stop_objective(state, task)
@@ -231,7 +231,7 @@ def build_payload(obs, model="jev-latest"):
             "Once oriented toward the target, accelerate as needed to close range and brake before minimum. "
             "Target bearing is current geometry, not an interception destination. Collision/obstacle safety overrides this recovery phase. "
         ) + instructions
-    instructions += " Each criterion is a JSON facts table. Read candidate_schema for columns/units and warning_meanings for every warning; all 128 choices remain available."
+    instructions += " Each criterion is a JSON facts table. Read candidate_schema for columns/units and warning_meanings for every warning; all 64 choices remain available."
     return {"model": model, "state": state, "questions": {"action": {"type": "choice", "instructions": instructions, "criteria": criteria}}}
 
 

@@ -3,6 +3,8 @@
 # Each registered module owns validate_params, validate_manifest,
 # target_platform_id, adapt_observation, validate_observation, build_payload and
 # status_params. A build_stop_payload hook is optional for target-specific facts.
+# ACTION_CHOICES/COURSES_DEG belong to each task; shared STOP also uses DIRECTIONS.
+# Navigation/following keep 64 choices; only accompaniment uses the finer 128 grid.
 
 from tasks import task1_waypoint, distance_following, task3_accompany, stop
 

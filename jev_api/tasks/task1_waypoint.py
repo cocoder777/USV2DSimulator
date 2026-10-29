@@ -5,7 +5,7 @@ import math
 from geometry.coordinates import KNOT_MPS
 from geometry.motion import predict_ground_motion, braking_facts, preview_duration
 from geometry.obstacles import nearby_obstacles
-from action_space import ACTION_CHOICES, DIRECTIONS
+from action_space import ACTION_CHOICES, DIRECTIONS, COURSES_DEG
 from tasks.presentation import position_text, describe_clearance, add_obstacle_state, AVOIDANCE_INSTRUCTIONS
 from geometry.waypoint import WaypointGeometry
 
@@ -70,7 +70,7 @@ INSTRUCTIONS = (
     "Prefer faster useful progress when braking remains feasible; choosing a slower available speed needs a reason "
     "such as an active circle ceiling, braking distance, turning uncertainty or final parking. "
     "Travel fast when far enough away, aligned, and able to brake before the next circle; slow for turns or nearby targets. "
-    "Sixteen compass courses are available, so an exact straight bearing may be unavailable. "
+    "Only eight compass courses are available, so an exact straight bearing may be unavailable. "
     "Use adjacent courses that bracket the direct bearing when necessary, with timely small corrections rather than long "
     "off-bearing runs followed by large recovery turns. Hold a course only while its predicted motion remains useful. "
     "A course change after passing a waypoint is appropriate for the next leg; do not turn early toward a future point. "

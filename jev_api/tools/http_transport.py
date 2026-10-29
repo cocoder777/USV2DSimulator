@@ -123,8 +123,12 @@ class JevTransport:
                 return self._call_urllib(body, headers, endpoint, metrics)
             raise ValueError("Unknown transport: " + mode)
         except urllib.error.HTTPError as error:
+            try:
+                failure = self._http_error(error, error.code, metrics)
+            finally:
+                error.close()
             self.close()
-            raise RuntimeError(f"Jev returned HTTP {error.code}") from None
+            raise failure from None
         except Exception:
             # POST 可能已到服务端；不自动重试，避免重复调用。
             self.close()
@@ -148,8 +152,22 @@ class JevTransport:
         metrics["wait_headers_s"] = time.perf_counter() - mark
         with response:
             if not 200 <= response.status < 300:
-                raise RuntimeError(f"Jev returned HTTP {response.status}")
+                raise self._http_error(response, response.status, metrics)
             return self._read(response, metrics)
+
+    @staticmethod
+    def _http_error(response, status, metrics):
+        """Keep bounded error details (e.g. max_tokens_exceeded), never request headers."""
+        metrics["http_status"] = status
+        detail = ""
+        try:
+            detail = response.read(4096).decode("utf-8", errors="replace")
+        except (OSError, http.client.HTTPException):
+            pass
+        detail = " ".join(detail.split())
+        if detail:
+            metrics["http_error_body"] = detail
+        return RuntimeError(f"Jev returned HTTP {status}" + (f": {detail}" if detail else ""))
 
     def _resolve_route(self, endpoint, metrics):
         # 预连接和正式请求共用地址/代理规则，避免建立一条实际用不到的连接。

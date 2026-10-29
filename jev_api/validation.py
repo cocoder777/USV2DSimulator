@@ -92,14 +92,14 @@ def valid_request(packet):
         if not 1 <= ratio <= 100000 or abs(ratio - round(ratio)) > 1e-3:
             return False
         speeds, courses = space["speeds_knots"], space["courses_deg"]
+        task_module = get_task(task["code"])
         if (
             len(speeds) != 8
-            or len(courses) != 16
+            or list(courses) != list(task_module.COURSES_DEG)
             or not all(finite(v) and v >= 0 for v in speeds)
             or not all(finite(v) and 0 <= v < 360 for v in courses)
         ):
             return False
-        task_module = get_task(task["code"])
         operation = obs["operation"]
         if packet["type"] == "stop_request":
             return operation == "stop" and stop.validate_observation(obs, finite)

@@ -2,7 +2,9 @@
 
 import math
 
-from action_space import ACTION_CHOICES, SPEED_FRACTIONS
+from action_space import (ACCOMPANY_ACTION_CHOICES as ACTION_CHOICES,
+                          ACCOMPANY_COURSES_DEG as COURSES_DEG,
+                          ACCOMPANY_DIRECTIONS as DIRECTIONS, SPEED_FRACTIONS)
 from geometry.accompany import AccompanyGeometry
 from geometry.coordinates import KNOT_MPS
 from geometry.motion import predict_ground_motion

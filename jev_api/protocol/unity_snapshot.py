@@ -5,7 +5,7 @@ import time
 from geometry.coordinates import KNOT_MPS
 from protocol.frames import STOP
 from tasks.registry import get_task
-from action_space import SPEED_FRACTIONS, COURSES_DEG
+from action_space import SPEED_FRACTIONS
 
 
 class UnitySnapshotAdapter:
@@ -141,7 +141,7 @@ class UnitySnapshotAdapter:
                    planning=dict(action_duration_s=local["action_duration_s"], simulation_paused_while_deciding=True),
                    execution=local["execution"],
                    action_space=dict(speeds_knots=[maximum * f for f in SPEED_FRACTIONS],
-                                     courses_deg=list(COURSES_DEG)), model_speed_unit=self.speed_unit)
+                                     courses_deg=list(task_module.COURSES_DEG)), model_speed_unit=self.speed_unit)
         obs["operation"] = "stop" if kind == STOP else "execute"
         task_module.adapt_observation(params, local, task["situation"], obs, self.task_state)
         if kind == STOP:

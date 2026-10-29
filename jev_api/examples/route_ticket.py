@@ -4,7 +4,7 @@ from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
 
 
 # 换成自己的官方 TypeSafe API key 即可运行。
-API_KEY = "apikey_262fad86dabbdf64bad8847eff8ed10446c_2a28eda5476e1798a4d3c7c843d1c76302706522686efa24d124cf33938ed141"
+API_KEY = "apikey_2180a45feea342e94466a7b4be0e8439285f_2da086b9287fa9932ad47f2067309b66de3d24440dbf189df165df8c54f28c3d"
 
 
 def main():

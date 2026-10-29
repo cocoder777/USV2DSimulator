@@ -1,166 +1,359 @@
-﻿# 当前 Jev 控制与协议
+# 当前控制与 Jev 协议
 
-本文描述 Unity 与主 `jev_api/` 的通信协议。`jev_api_guoliang/` 是面向甲方的独立程序，不是主项目运行依赖。态势输入使用 0x0060，没有独立的 tag 字段或报文类型。
+本文描述主项目 **Unity ↔ `jev_api/` ↔ 外部 Jev 服务** 的通信约定。业务要求参照[甲方单艇决策服务说明](../甲方接口/对接单艇决策服务.md)，二进制布局核对同目录的任务、状态、兵力融合态势、航速航向四份 Excel；当前实现依据为 `ClientProtocol.cs`、`BoatUdpBridge.cs`、`ObservationBuilder.cs` 和 `jev_api/protocol/`。
 
-Unity采样并暂停 → 发送任务和全部当前实体 → Python汇齐同次采样 → Jev从128 Choice选目标航速/航向 → Unity平滑执行固定时长 → 再采样。船与障碍物共同暂停，地图虚线不进入模型。
+启动和游戏操作见[项目 README](../../README.md)，代码分工、候选动作和各任务决策方法见[Python 决策层说明](../../jev_api/README.md)。`jev_api_guoliang/` 是独立接入程序，不是本地链路的一环；下文“当前实现”默认指主项目。
 
-## 适用范围与接口差异
-
-甲方业务定义见[接口说明及同目录四份 Excel](../甲方接口/对接单艇决策服务.md)。Unity 的暂停采样、动态障碍物及执行配置通过下文的扩展字段表达。
-
-| 项目 | 当前约定与差异 |
-| --- | --- |
-| 帧与单位 | 使用甲方帧标识、字段大小写和二进制布局，速度为节，支持态势组播与算法JSON分片 |
-| 航点/进度 | 列表只含目标，不含地图起点；currentRoute为已完成目标数量，0指向第一个目标 |
-| 本艇与障碍物 | 共用0x0060，按platCode/platformId选本艇；障碍物type=0，不创造甲方枚举 |
-| 任务调度 | guoliang每个有效新任务均接管旧任务，即使身份参数相同；Unity同任务每次采样新decision_id，重复采样不重调模型 |
-| 态势缓存 | guoliang按platformId取最新新鲜本艇态势，默认2.5s；Unity按快照时戳和完整实体清单汇齐，3s缺失失败，不跨采样补齐 |
-| 执行方式 | guoliang推理期间继续运动、续发旧指令、过保持时限发零速、可恢复错误连续3次失败；Unity暂停等待、执行单动作，失败后手动Retry，无本地代选 |
-| 到达与停车 | guoliang从态势推进并主动零速停车；Unity按物理步判定到达，立即停止由Jev决策 |
-| routeRadius | 甲方定义为转弯半径，guoliang用于到达圈，0/缺省回退20m；Unity使用独立arrival_radius_m |
-| 模型 | guoliang默认Kev-4B，另有Jev/Julia；主项目使用Jev及128个速度/航向候选 |
-| 状态详情/输入兼容 | guoliang另报nextWaypointIndex、剩余距离/时间、完成百分比等，Unity只需正式currentRoute及采样关联；主入口只接收正式二进制，不接其调试用裸JSON/HEX文本 |
-
-甲方MD中的控制平台类型写为UINT16，Excel和实际0x0662编码为uint32；本协议采用下文20字节控制帧。任务、态势和控制的速度统一按节解释。
-
-## 帧与通道
+## 1. 通道与交互
 
 | 方向 | 标识 | 内容 | 通道 |
 | --- | --- | --- | --- |
-| Unity → Python | 0x0660 | simId/id/code/params任务，附unity_only | UDP点播 |
-| Unity → Python | 0x0060 | 本艇和全部障碍物，各一帧态势 | UDP组播 |
-| Unity → Python | 0x0666 | simId/id/code停止，附当前停车采样扩展 | UDP点播 |
-| Python → Unity | 0x0662 | PlatCode/Speed/Course二进制控制 | UDP点播 |
-| Python → Unity | 0x0664 | simId/id/code/status/description/params状态 | UDP点播 |
+| Unity → Python | `0x0660` | 算法任务：`simId/id/code/params`，附采样扩展 | UDP 点播 |
+| Unity → Python | `0x0060` | 每个实体一帧态势：本艇、指定目标及普通障碍物 | UDP 组播 |
+| Unity → Python | `0x0666` | 停止算法，附新的停车采样扩展 | UDP 点播 |
+| Python → Unity | `0x0662` | 目标航速、目标航向控制 | UDP 点播 |
+| Python → Unity | `0x0664` | 算法状态及业务明细 | UDP 点播 |
+| Python ↔ Jev | — | `model/state/questions` 请求与 Choice 答案 | HTTPS JSON |
 
-多字节整数大端。公共头12字节：`infoUnitSeq:uint8 / infoUnitId:uint8 / infoUnitLength:uint16 / timestamp:uint32 / reserved:uint16 / secondaryInfoUnitId:uint16`。seq/id/reserved填0，length含头。算法JSON再加totalPackets:uint8 / packetIndex:uint8，头共14字节；首片再带contentLength:uint16，续片无长度，后接UTF-8 JSON。头后最多1450字节（首片含长度），最多10片，JSON实际上限14498字节。支持乱序、相同重复片，冲突片拒绝，3秒过期，无自动重发。guoliang接收端支持分片，其build_json_packet目前只生成单片；本项目按1450字节预算发送。
+一轮为：Unity 采样并暂停 → 发送全部态势及任务 → Python 汇齐同次快照并校验 → 回复执行中 → 构造模型请求 → Jev 选择动作 → Python 发控制和关联状态 → Unity 配齐并执行 → 再次采样。UDP 到达顺序不作为正确性前提。
 
-算法任务/状态/停止时戳为当天UTC起算0.1ms；态势/控制为当天北京时间起算ms。时戳不等于仿真tick。同次采样所有实体共用态势时戳，快速同tick Retry也分配新快照时戳。
+默认动作 1 秒仿真时间，物理步长 0.02 秒，即每动作 50 步。等待决策期间本艇、目标和障碍物共同暂停，墙钟间隔包含模型耗时，**不是实时 1 Hz 心跳**。状态在处理、控制结果、完成或失败时发送，一轮可有多条。
 
-默认Unity 127.0.0.1:5005 ↔ Python 127.0.0.1:5006；态势239.255.0.10:18010，默认网卡127.0.0.1，组播回环开启。Python的--host/--port是Unity回包端，--listen-host/--listen-port是任务监听端；--situation-group/--situation-port/--multicast-interface与Bridge一致。只接受配置的Unity源端点。
+### 默认网络配置
 
-guoliang现场默认任务0.0.0.0:18014、控制192.168.3.201:18123，Compose示例为192.168.3.126:18123，状态回任务源端口（行为树默认7612）；这些是部署地址差异，Unity使用本机配置。
-
-## 态势字段（tag）
-
-0x0060总长40字节，体为 `>hiiHHHhhHBBI`，按以下顺序：
-
-| 解码字段 | 线类型 | 含义、量化及用途 |
+| 用途 | 默认值 | Python 参数 / Unity Bridge 字段 |
 | --- | --- | --- |
-| direction | int16 | 相对发现平台、北起顺时针方位，1度；不是运动方向 |
-| latitude | int32 | 度，90/2^31；进入位置计算 |
-| longitude | int32 | 度，180/2^31；进入位置计算 |
-| platformId | uint16 | 平台身份；Unity本艇1001，障碍物2001起，与任务platCode关联 |
-| sign | uint16 | 敌我属性；本艇2（我），障碍物0（不明），不进入模型 |
-| targetCourse | uint16 | 实际运动方向，北起顺时针1度；65535未知，解码null |
-| height | int16 | 高度，Unity填0，不进入二维决策 |
-| targetSpeed | int16 | 实际有符号航速，0.1节，范围-20～200节；原始-1未知，不当成-0.1节 |
-| type | uint16 | 0不明/1渔船/2浮标/3灯塔；Unity填0，不创建障碍物枚举 |
-| targetTypeConfid | uint8 | 0～100，255未知，Unity填未知 |
-| threatLevel | uint8 | 威胁等级，255无效，Unity填无效，不进入模型 |
-| batch | uint32 | 融合目标批号；Unity以platformId稳定模拟，不作采样编号 |
+| Unity 收控制/状态，同时作为发包源端口 | `127.0.0.1:5005` | `--host/--port` / `port` |
+| Python 收任务/停止 | `127.0.0.1:5006` | `--listen-host/--listen-port` / `targetAddress/targetPort` |
+| 态势组播 | `239.255.0.10:18010` | `--situation-group/--situation-port` / `situationGroup/situationPort` |
+| 组播网卡 | `127.0.0.1` | `--multicast-interface` / `multicastInterface` |
 
-targetSpeed是实际速度，0x0662的Speed是目标速度，不能互换。Unity障碍物速度为正弦轨迹的导数；标准态势在静止时运动方向未知。本艇当前艏向和角速度通过 execution 补充，用于受限转向预测，静止时仍有效。负速度量化为保留线值-1时用相邻有效-2。经纬度、0.1节/1度运动方向量化实际生效；扩展不重复精确位置或线速度，艏向/角速度是新运动模型所需的独立状态。Unity +X东/+Y北、1单位1米，地理基点120.5°E/30.2°N。
+Unity 组播回环开启，TTL 为 1，点播与组播共用发包 socket。Python 只接受配置的 Unity 源 IP **和端口**；Unity 也只接受配置的 Python 源端点。跨机时需要同时调整地址、监听和网卡。
 
-Unity航向就近取整；guoliang模拟编码用int截断浮点航向。两者采用相同的1度线侧网格，舍入策略不同。
+甲方行为树算法通道、动力控制通道和态势组播在部署上相互独立。主客户端将控制与状态发回同一个 Unity 端点，不能直接套用为甲方现场的分离端点配置。
 
-## 任务和unity_only
+## 2. 二进制帧
 
-任务code=trackingMode；params为platCode/planRouteNum/currentRoute/planWaypointNum/planWaypointList。点为routeLon/routeLat/routeSpeed（度/度/节）。列表只含目标，点数一致；currentRoute是已完成数量，0指向第一目标，完成时等于点数。simId使用EpisodeId，id使用RunId，均为随机身份，重置/重启天然隔离；每次采样沿用任务身份。地图起点用于Unity显示、任务判定与轨迹，不进入正式目标列表。
+多字节整数使用**大端**，不使用裸 JSON、HEX 文本或额外 `version` 字段。
 
-unity_only是本项目JSON扩展对象，不是甲方标准报文类型，不直接作为模型状态发送。字段如下：
+### 2.1 公共头：12 字节
 
-| 字段 | 含义及必要性 |
+| 偏移 | 字段 | 类型 | 当前含义 |
+| --- | --- | --- | --- |
+| 0 | `infoUnitSeq` | uint8 | 发送填 0 |
+| 1 | `infoUnitId` | uint8 | 发送填 0 |
+| 2 | `infoUnitLength` | uint16 | 本包总字节数，含头 |
+| 4 | `timestamp` | uint32 | 按类别使用下表的时基 |
+| 8 | `reserved` | uint16 | 0 |
+| 10 | `secondaryInfoUnitId` | uint16 | 报文标识 |
+
+| 报文 | 时戳时基 |
 | --- | --- |
-| action_duration_s:number | 单次动作执行时长，正式控制没有时长字段 |
-| decision_id:string、tick:int | 关联当前采样、拦截旧动作；同tick Retry通过不同decision_id区分 |
-| event:string | 区分采样、立即停止、完成、碰撞等本地事件 |
-| situation_timestamp:uint32 | 精确标记本次快照，不能只取最新缓存 |
-| collision_radii_m:对象 | key为全部平台ID，value为米；兼作完整性清单，标准态势没有半径和实体总数 |
-| max_speed_knots:number | Unity可调速度上限，用于生成固定8档比例和8航向；不能从实际速度或航点限速推得 |
-| execution:对象 | 保留受限运动配置与当前转向状态，见下文；移除恒为 0 且不参与模型的 speed_transition_time_s / course_transition_time_s |
-| arrival_radius_m:number、stop_speed_knots:number | arrival_radius_m 仅寻线任务提供，表示打卡半径（本艇包络半径乘可调倍率，默认5倍）；跟踪及其 STOP 省略。停车阈值保留，立即停止使用独立低速阈值，不以转弯半径代替到点范围 |
+| 任务/停止/状态：`0x0660/0x0666/0x0664` | 当天 UTC 00:00 起算，0.1 ms |
+| 态势/控制：`0x0060/0x0662` | 当天北京时间（UTC+8）00:00 起算，ms |
 
-execution 当前字段：`motion_model="bounded_acceleration"`、`max_acceleration_mps2`、`max_deceleration_mps2`、`max_yaw_rate_deg_s`、`max_angular_acceleration_deg_s2`、`fixed_dt_s`、`hull_length_m/hull_beam_m`；`heading_course_deg` 为北起顺时针实际艏向，`yaw_rate_deg_s` 为顺时针角速度，静止时仍有效。`active_target_course_deg/active_course_error_deg` 表示当前保持的航向目标及未取模角差，保证连续相同指令在过冲或跨 ±180° 时延续原转向分支。`obstacle_avoidance_radii_m` 以障碍物平台 ID 为 key，传递每目标安全半径；`collision_radii_m` 继续只表示实体碰撞半径并兼作完整实体清单。
+时戳不是仿真 tick。同次采样全部实体共用态势时戳；同 tick 的 Retry 也分配新决策 ID 和快照时戳。控制时戳用于本地配对，不以跨日大小比较代替任务身份校验。
 
-运行身份与进度使用正式simId/id/currentRoute；Python内部worker envelope由这些字段派生。接收端固定采用暂停决策，候选表按上述速度上限生成。
+### 2.2 算法 JSON 与分片
 
-STOP按simId/id读取已接收的正式任务上下文，正文不包含params；未接收对应任务时拒绝，需先恢复任务通信。缓存任务配置不等于复用旧态势。
+仅 `0x0660/0x0666/0x0664` 在公共头后增加 `totalPackets:uint8` 和 `packetIndex:uint8`，因此头长 14 字节。
 
-有可关联身份的非法采样/未知STOP上下文返回状态3，避免Unity无限等待。STOP状态的currentRoute为最近已接收正式任务的数量，停车动作不使用其导航进度。
+```text
+首片：[14B 头][contentLength:uint16][UTF-8 JSON 片段]
+续片：[14B 头][UTF-8 JSON 片段]
+```
 
-Unity先组播全部当前实体，再点播任务/停止；接收顺序不限。Python按半径表key与共同timestamp汇齐，缺一不可；3秒缺失报告失败，由用户Retry，绝不拿上轮补齐。消费后删除对应态势，缓存记录本身也有3秒有效期。同decision_id去重，较旧tick拒绝；新任务撤销旧任务等待和输出，退休身份不重新激活。只缓存正式任务配置供STOP，进入一次决策的态势全部来自当前采样。
+- 总片数 1～10，片号从 1 起；同消息各片共用类型、时戳和总片数。
+- 14 字节头之后的体最多 1450 字节，首片两字节长度也计入预算。
+- `contentLength` 是整段 JSON 的 UTF-8 **字节数**；受十片预算约束，实际上限 **14498 字节**。
+- 按来源、类型、时戳和总片数重组。允许乱序和相同重复片，冲突片或长度不符拒绝，未齐片 3 秒过期。
+- JSON 必须是对象，发送端拒绝 NaN/Infinity。分片不提供可靠传输、确认重发或缺片补发。
 
-## 目标连线距离跟随任务（项目新增）
+### 2.3 态势 `0x0060`：40 字节
 
-`code="targetFollowing"` 区分运动目标距离跟随与原 `trackingMode` 航路点寻线。此编码和业务参数是本项目预研扩展，尚非甲方已定义算法；帧头、0x0660/0x0060/0x0666/0x0662/0x0664、单位和动作配对机制复用现有协议。
+公共头 12 字节，体布局 `>hiiHHHhhHBBI`，字段顺序如下。
+
+| 字段 | 类型 | 单位、特殊值与用途 |
+| --- | --- | --- |
+| `direction` | int16 | 目标相对发现平台的方位，北起顺时针，1°；不是运动方向 |
+| `latitude` | int32 | 度；线值乘 `90/2^31` |
+| `longitude` | int32 | 度；线值乘 `180/2^31`，东经为正 |
+| `platformId` | uint16 | 用任务本艇/目标编码关联 |
+| `sign` | uint16 | 0 不明、1 敌、2 我、3 友等；不替代指定目标编码 |
+| `targetCourse` | uint16 | 实际速度向量方向，北起顺时针，1°；65535 在当前适配中解为未知 |
+| `height` | int16 | 高度，负值为深度；本地填 0，不参与二维决策 |
+| `targetSpeed` | int16 | 实际有符号航速，0.1 节；业务范围 -20～200 节，原始线值 -1 为特殊值 |
+| `type` | uint16 | 0 不明、1 渔船、2 浮标、3 灯塔；本地统一填 0 |
+| `targetTypeConfid` | uint8 | 0～100；255 为无法判断 |
+| `threatLevel` | uint8 | 0 高、1 中、2 低、3 不明；255 无效 |
+| `batch` | uint32 | 融合批号；本地用平台编码模拟，不作快照序号 |
+
+Excel 将航速线值 -1、航向 65535 描述为“不限制”；当前决策输入将它们视为未知并解为 `None`。本艇速度未知、目标速度未知或运动目标方向未知时拒绝观测，不能当作有效零速/零方向。静止时无运动方向，本艇艏向由扩展提供，伴随目标另有静止参考方向。
+
+本地本艇编码 1001、普通障碍物 2001 起、指定目标 3001。本艇和伴随目标 `sign=2`，距离目标及普通障碍物为 0；“敌方跟随”是任务用途，当前距离游戏并未将目标标成敌方。目标按任务平台编码选择。普通障碍物在模型中明确描述为障碍物，不创造甲方 `type` 枚举。
+
+Unity 实际量化经纬度、0.1 节速度和 1°方向；微小负速度若量化到保留线值 -1，就改用 -2。扩展不另发精确位置/线速度来绕过量化。
+
+### 2.4 控制 `0x0662`：20 字节
+
+公共头 12 字节，体 `>IHH`：
+
+| 字段 | 类型 | 解释 |
+| --- | --- | --- |
+| `PlatCode` | uint32 | 4 字节平台编码；任务及态势平台字段仍为 uint16 |
+| `Speed` | uint16 | 目标航速，当前按 0.01 节解码 |
+| `Course` | uint16 | 目标绝对航向，0.01°，北起顺时针，范围 [0,360) |
+
+Excel 控制字段名大写开头，JSON 业务对象用 `platCode/speed/course`。本地发送非负航速，Unity 执行解码后的量化控制；时长取匹配请求，状态不重复发送未量化动作。
+
+## 3. 算法 JSON 公共结构
+
+### 任务、停止与状态
 
 ```json
-{"simId":"episode","id":"run","code":"targetFollowing","params":{"platCode":1001,"targetPlatformId":3001,"minFollowingDistanceM":100,"maxFollowingDistanceM":200}}
+{"simId":"episode","id":"run","code":"trackingMode","params":{}}
 ```
 
-跟随任务不提供 `planWaypointList/planWaypointNum/currentRoute`；本艇与目标身份必须不同，两实体半径之和 < 最小中心间距 < 最大中心间距，均为有限米制数值。目标半径位于 `unity_only.collision_radii_m`，目标必须参加当前快照屏障。目标 0x0060 使用原有位置、实际速度及运动方向，不新增类型枚举；direction 方位不能当作运动方向。目标速度未知、运动中方向未知或本轮目标缺失均失败暂停，不使用旧缓存补齐。`unity_only` 仍复用动作时长、执行状态、快照与停止阈值；跟踪省略不参与判定的 arrival_radius_m。客户端需重启加载该适配变化，旧格式中存在的多余字段仍可接收。
+这里只示意外壳，实际任务参数见下一节。`simId + id` 关联任务，`code` 是算法编码。甲方行为树中 `id` 为节点 ID；本地 `simId=EpisodeId`、`id=RunId`，重置后换身份。没有正式 `requestId`。
 
-Python 内部 `observation.task.code="targetFollowing"` 保留原任务类型，`observation.operation="execute"/"stop"` 表示执行或停车，停车不覆盖原任务编码；这仅是内部表示，不增加甲方报文字段。目标放在独立 `target`，其他实体为 `obstacles`。HTTP 保留原有 `state.task.mode` 与 `state.task.guidance="line_of_sight_distance"` 表达；`line_reference` 是目标朝向当前本艇的一侧、距目标为区间中点的位置：pF=pT-dRef*(pT-pB)/|pT-pB|。该点不根据目标运动方向定义；不要求本艇在目标后方，不惩罚侧方或前方。距离处于区间内时不强求精确中点，参考点与本艇重合也不表示应停车。原目标方向缓存仅保留内部兼容，后方／横向关系仅由 Unity 作为历史对照指标记录，不再用作模型控制目标。
+停止 `0x0666` 正式正文只有 `simId/id/code`，不带 `params`。本地另带本轮 `unity_only`；Python 按身份恢复已接收的任务配置，找不到上下文就失败。
 
-模型状态提供当前距离、距离变化率、目标与本艇速度在当前连线上的径向分量、目标是否正趋近本艇及直接远离方位；每候选仍提供联合时刻的最小／最大距离、末端距离／距离变化率、本艇末端运动、软参考误差、径向制动余量和长预览。过近或预测将逼近下限时要求主动转向／运动拉开距离，尤其关注迎面目标，必要时安全侧向绕开；本艇零速不会阻止目标继续逼近，不能反复停车等待。超距时仍应安全追近，不能仅因目标正在接近就逃离。直接远离方位仅为几何事实，不是本地代选指令；转向／加速惯性及障碍可能要求另一侧逃逸。
+状态 `0x0664`：
 
-跟踪候选保留 Choice API 的字符串格式和原 128 个 ID；字符串内容改为 JSON 数值表，`state.candidate_schema` 一次解释数组顺序与单位，`state.warning_meanings` 一次解释显式警告码。`range_m/preview_range_m` 为最小、最大、末端距离；`target_hull_clearance_m` 为动作及长预览最小目标实体净距；障碍实体净距包含动作最小／末端及预览最小／末端，安全净距包含动作最小与预览最小／末端。`end_motion`、末端距离变化率、径向制动距离及余量、参考误差、转向误差全部保留。速度字段随模型单位变为 `_mps` 或 `_knots`，其他数值仍为米、度、度每秒。当前距离、当前参考误差、动作时长和预览时长由公共状态提供，候选不重复这些值；不再重复相同的规则、单位和假设段落。
-
-跟踪仅移除与停车距离完全相同的 `braking.distance_to_ceiling_m`，保留 `distance_to_stop_m`；径向制动距离与本艇停车距离含义不同，仍保留。跟踪运动预测通过 `route_details=False` 跳过未使用的中点积分与路径速度数组，端点、逐段路径、速度／角运动及碰撞预测不变。寻线继续使用完整中点与速度数组计算入圈和通过速度。连线参考坐标及 Unity 纵横向诊断未删除。
-
-目标仍按当前速度做匀速预测，未来转弯／急停未知；其他障碍物仍冻结当前位置计算净距。保持全部 128 候选，不做本地排序、过滤或代选。当前动作与长时间保持指令的预览警告分开；当前已经过近时所有候选最小值均含初态，比较末端变化及长预览恢复。制动余量为近似同向、目标匀速时的径向估计，不是转弯安全保证。
-
-超距时 HTTP `state.range_recovery` 表达当前恢复阶段、目标方位、带符号航向误差、当前运动是否背离及转向角速度。仅根据当前几何判断：本艇航向与目标方位的绝对误差超过 90° 为 `reorient_before_catchup`，否则为 `close_range`。前者给各候选增加动作末端航向误差与指令方位误差，标注零速不转向及背离指令。要求 Jev 持续执行有用的安全转向，不因掉头第一秒仍增距而反复取消，避免沿错误方向加速；碰撞与障碍安全仍优先。这是决策请求表达，无本地动作代选、排序、过滤或执行端强制限速；区间内只有预计将失距时提示提前恢复，静态相对方位本身不是误差；STOP 不附带恢复阶段。正式任务和态势报文未增加字段。
-
-在区间外半段（中心距不小于区间中点）且正在增距时，若航向仍背离目标，还比较到达上限的时间 `(dMax-d)/range_rate` 与恢复到朝向目标半平面的估计时间。后者按超过 90° 的角度、角速度／角加速度限制及当前角速度估计，并加一个决策间隔；时间不足即提前启用同一恢复阶段。仅该情况补充 `trigger=opening_threatens_maximum_before_turn`、`time_to_maximum_at_current_range_rate_s` 和 `estimated_time_to_inward_heading_s`。这是当前距离变化率及方位的近似，不是未来目标轨迹或安全保证；最低非零速度不是强制限速。
-
-未来目标脚本、整段轨迹及场景时长不进入决策请求。进入距离区间持续执行，超距记录并尝试恢复；Unity 到达实验时长后结束，不保证跟随合格或零速。状态 params.targetPlatformId 标记目标，不伪造 currentRoute。STOP 从已接收任务恢复配置并用当前完整快照，采用独立停车题目，暂停距离跟随与主动远离目标；即使制动期间超过场景时长，也继续到实际停稳后发 stop_completed，导出 stopped。实体碰撞仍优先于同一步结束判定。
-
-## 友方伴随（甲方5.3）
-
-`code="accompanyMode"`，正式params为`platCode/targetPlatCode/offsetAlongMinM/offsetAlongMaxM/offsetAcrossMinM/offsetAcrossMaxM/syncHeading/maxSpeed`，不带航点和currentRoute。纵向正为前方、横向正为右舷，两轴均要求有限且min≤max；要求整个允许矩形避开两艇实体包络。maxSpeed为节，0表示不附加任务限速；Python按任务/物理上限的较小值生成八档比例速度及十六绝对航向，不强制瞬间改变实际航速。
-
-当前伴随仅包含本艇和指定友方目标，不启用普通障碍物；友方目标sign=2，仍通过targetPlatCode而非sign选择。目标按同一0x0060提供当前经纬度、实际速度和运动方向并参与快照屏障，运动方向暂作目标艏向。Unity额外提供`unity_only.target_reference_course_deg`，为本轮目标参考方向，静止时直接用于体坐标轴；它不重复位置/速度，也不包含未来路线或转向命令。运动方向有效时以正式态势方向为准，无效的静止方向直接取该扩展，不做推断或历史补帧。
-
-Python内部task.code仍为accompanyMode，operation表示execute/stop。依据当前完整快照、物理tick及前次完整观测估计目标转速/加速度，不用墙钟间隔或未来脚本。目标按观测转速预测，加速度最多外推2秒；本艇按共享受限运动模型预测。旋转运动前馈与位置误差形成LOS参考航向，候选提供指令/末端艏向对参考的偏差；不生成本地推荐航速或控制指令。内部控制区使用0.05米观测容差。使用甲方位置带中间一半作为内部控制区域，外部inPosition/越界量判定保持原带。控制区外请求强调接近及单动作改善，区内强调旋转体坐标变化率和边界余量；长预览仅假设保持当前候选，实际每个动作后仍由Jev重新选择。候选包含当前动作及两个长预览时刻的位置、甲方位置带及内部控制区外距离、内部控制区单动作改善量、末端位置变化率、全预览两艇最小实体净距。同步模式在控制区内、位置变化率<=1m/s且观测目标转速<0.05°/s时加入艏向误差；位置模式无艏向目标。所有128候选完整保留，不排序、过滤或代选。Unity按物理步保留两艇碰撞和任务统计；转弯场景至少360秒，前48秒直航，此后持续2°/s转弯。 第四个场景为无障碍Irregular，替代Stationary：至少240秒，先直航40秒，再按固定种子反复变速和左右转向。默认友艇约6～8节，转速不超过2°/s，转速渐变；按本艇物理能力、任务限速和位置带偏移进一步收紧目标运动，未来脚本仍不发送。
-
-0x0664.params使用甲方5.3的targetPlatCode、currentAlongM/currentAcrossM、alongOutM/acrossOutM、inPosition、targetSpeed和targetCourse，不伪造currentRoute。处理/控制回包的明细来自本次观测；场景结束通知可带Unity实际末态明细。inPosition=1仍持续状态1。仿真实验达到场景时长后由Unity通知结束并回状态2，这只是实验结束，不是稳定伴随验收；STOP使用当前完整采样并暂停位置/航向目标，直到实际停稳再通知结束。实验初始位置在允许带外，方向、速度和位置带可调；八档速度和十六航向的离散精度会限制精确保持。
-
-同步分支先进入并稳定保位，再对齐艏向。初始静止直接给参考方向，零速不能原地转艏。
-
-伴随HTTP state省略世界相对速度投影，保留旋转体坐标位置变化率；boat不重复execution中的艏向和角速度。execution向模型省略fixed_dt_s、hull_length_m、hull_beam_m及空obstacle_avoidance_radii_m，内部观测和预测仍使用完整配置。两艇实体半径、位置带中心参考、三个预测时刻和全部候选净距保留；正式报文字段不变。
-
-## 控制与状态关联
-
-0x0662总长20字节，体 `>IHH`，PlatCode:uint32 / Speed:uint16 / Course:uint16，后两项均0.01精度（节、度）。Unity执行量化解码控制，最大速度校验容纳半个量化步长；不以JSON未量化值替代。
-
-0x0664.params.currentRoute为已完成目标数量；执行中附unity_only:{decision_id,tick,control_timestamp}，processing不带control_timestamp；失败用status=3和description表达。动作值来自0x0662，执行时长来自匹配的本地请求。Unity按正式simId/id、decision_id、tick校验，状态与控制时戳配齐才执行。旧任务/旧决策的动作和状态不应用，终态不由迟到执行中状态覆盖。
-
-状态1/2/3是执行中/完成/决策失败。一次动作不是任务完成；Unity实际判定任务或停车完成后通知Python，再回状态2。API、解析、动作、数据缺失失败为3。Unity碰撞单独失败、冻结并保存轨迹，通知仿真碰撞，不转换成算法状态3。立即停止由Jev选停车动作，实际零速后进入Stopped，不继续航线。
-
-## 单位、模型与仿真规则
-
-线侧全部速度为节；地图、轨迹、内部几何与物理使用米/m/s。Jev默认速度节、距离米，state.units注明1节=1852/3600 m/s；--jev-speed-unit mps仅将模型速度表达设为m/s，通信单位为节。任务routeSpeed转换为内部m/s，表示圈内实际通过上限，不是要求达到的参考速度。
-
-HTTP正文为model/state/questions，提供8档比例[0,.05,.1,.2,.35,.5,.75,1] × 北起22.5度十六航向，共128个Choice。内部目标索引从0起，模型目标编号从1起；已通过但尚未离开的圈继续提供速度上限。Python不排序、过滤或代选动作。128 个候选共享一次任务/运动说明，各候选只列不同的运动、打卡与净距事实，避免重复说明超过模型输入长度限制。 航线候选引用state.candidate_policies共享原有策略原文；距离跟随的values按state.candidate_value_columns给出完整数值行，warnings及turn_error_deg保留具名。仅精简表达，不改变预测计算、警告或动作集合。
-
-障碍物进入Jev后明确为障碍物，提供当前运动方向、速度、相对位置、半径、净距。附近范围相对安全圈边界计算，覆盖最大速度的制动距离、取消角速度的运动距离及两个动作周期的余量；候选净距冻结障碍物当前位置，不预测其未来轨迹。
-
-Unity障碍物沿正弦轨迹运动，每物理步使用相对扫掠判碰，碰撞优先于同一步的完成判定。航点按序入圈，通过后继续统计圈内速度直到离圈，终点要求圈内低速停车。超速只记录，不裁剪指令、不阻止打卡；完成不能代表没有超速。速度按目标差值受加速/减速上限约束；转向按最短航向差规划受限角加速、匀角速度和角制动过程，相同目标保持转向分支。默认上限为 50 节、+1.46/-1.75 m/s²、12°/s、4°/s²，首轮不建随航速变化的曲线；手动模式使用相同运动上限，无附加阻尼。默认船长 11.6 m、宽 3.4 m，碰撞包络半径为 sqrt(length²+beam²)/2（约 6.044 m），打卡半径为该半径乘 waypointRadiusMultiplier，默认 5 倍（约 30.22 m）；扩大打卡圈同时扩大该点的通过限速适用范围，终点停车条件保留。该倍率通过 Unity 配置及面板修改，已有 arrival_radius_m 继续传输最终生效半径。
-
-小/大目标避碰安全半径默认 50/90 m，实体碰撞半径默认 3/12 m，各目标类别、半径与运动幅度可配。进入安全圈只记录安全距离不足，实体接触才触发碰撞失败。附近目标不限制个数，候选不做本地排序或过滤。
-
-默认动作与正常决策采样周期均为 1 s 仿真时间，物理步长 0.02 s，每动作 50 步。0x0060/0x0660 每次采样发送；0x0664 在 processing、控制结果、完成或失败时即时发送，一轮可以多条。推理等待仍暂停，墙钟发送间隔包含 API 耗时；不是独立的实时 1 Hz 心跳。当前动作按物理步预测；长预览覆盖完整转向与当前制动所需时间，使用不小于 0.1 s 的采样步长，假设保持同一指令，不承诺未来执行或安全。
-
-## 实现和验证
-
-ClientProtocol.cs与protocol/frames.py负责编解码/分片；ObservationBuilder生成任务和实体；BoatUdpBridge与boat_client负责收发；protocol/unity_snapshot.py的UnitySnapshotAdapter负责完整快照屏障及公共观测组装，tasks/负责各任务参数、业务适配、请求构造与状态参数，protocol/status.py封装公共状态关联；geometry/负责共享数值计算，SimulationRunner负责暂停和动作关联。tasks/registry.py统一注册trackingMode、targetFollowing与accompanyMode，航线位于tasks/task1_waypoint.py、伴随位于tasks/task3_accompany.py；followMode尚未实现。主项目不导入guoliang目录，通信不设version字段。
-
-离线测试：
-
-```powershell
-python -m unittest discover -s jev_api/tests -v
+```json
+{
+  "simId": "episode",
+  "id": "run",
+  "code": "trackingMode",
+  "status": 1,
+  "description": "tracking",
+  "params": {
+    "currentRoute": 0,
+    "unity_only": {
+      "decision_id": "decision",
+      "tick": 0,
+      "control_timestamp": 123456
+    }
+  }
+}
 ```
 
-模型JSONL日志包含任务、观测、完整请求、响应、动作及计时，不保存Authorization。闭环实验过程与结果见[本地实验记录](../bian_local/Jev仿真实验记录.md)，请求、响应及轨迹保存在 `Logs/`。
+| 状态 | 含义 |
+| --- | --- |
+| 0 | 发送方本地“已下发、未收到回复”，不是对端状态帧取值 |
+| 1 | 执行中：包括 processing、动作结果和持续跟随/伴随 |
+| 2 | 完成：本地由 Unity 判定任务/停车完成并通知后发送 |
+| 3 | 决策失败：无效输入、API、答案解码或控制编码等错误 |
+
+一次动作不是任务完成。实体碰撞属于 Unity 仿真失败，单独冻结、保存轨迹并通知 Python，不转换成算法状态 3。
+
+## 4. 三个任务的业务接口
+
+三个任务共用上述通道和控制帧，差别在编码、参数和状态明细。以下同时列出**甲方要求**与**当前实现**。
+
+### 4.1 航线任务：`trackingMode`
+
+甲方要求按给定航路点跟踪。调用 `params`：
+
+| 字段 | JSON 值类型 | 说明 |
+| --- | --- | --- |
+| `platCode` | 整数（uint16 范围） | 本艇编码 |
+| `planRouteNum` | 整数（uint16 范围） | 计划航线编号，本地为地图级别 |
+| `currentRoute` | 整数（uint16 范围） | 当前实现为已完成目标点数，0 指向第一目标 |
+| `planWaypointNum` | 整数（uint16 范围） | 必须等于列表长度 |
+| `planWaypointList` | 对象数组 | 只含目标点，不含 Unity 地图起点 |
+| 点内 `routeLon/routeLat` | 数值 | 实际经纬度，单位度 |
+| 点内 `routeSpeed` | 数值 | 当前按节传输，本地为圈内实际通过速度上限 |
+| 点内 `routeRadius` | 数值 | 甲方定义为转弯半径（米）；Unity 当前不生成、不使用 |
+
+```json
+{
+  "simId": "episode", "id": "run", "code": "trackingMode",
+  "params": {
+    "platCode": 1001, "planRouteNum": 0, "currentRoute": 0,
+    "planWaypointNum": 2,
+    "planWaypointList": [
+      {"routeLon": 120.501, "routeLat": 30.201, "routeSpeed": 12},
+      {"routeLon": 120.502, "routeLat": 30.202, "routeSpeed": 6}
+    ]
+  }
+}
+```
+
+此例省略本地必需的采样扩展。执行请求要求 `0 <= currentRoute < planWaypointNum`；完成通知可等于总点数。下一目标下标就是 `currentRoute`，不能再减一。
+
+甲方说明列出 `nextWaypointIndex/nextWaypoint/remainingWaypointNum/remainingDistanceM/estimatedRemainingTimeS/completionRate` 等状态明细；主客户端目前仅回 `currentRoute` 和本地关联扩展，**尚未提供完整甲方航线进度明细**。独立 `jev_api_guoliang/` 的进度字段较全，其完成率为 0～100，不代表主客户端也支持。
+
+本地使用 `unity_only.arrival_radius_m` 判定打卡，终点还须低于停车阈值，不使用 `routeRadius` 作为到达圈或转弯约束。甲方“计划航速”与本地“圈内通过上限”是正式接入时需确认的业务差别。
+
+### 4.2 敌方跟随：甲方 `followMode`，本地 `targetFollowing`
+
+甲方要求沿敌方/不明目标航迹尾随，默认在后方保持间距。正式 `params`：
+
+| 字段 | JSON 值类型 | 说明 |
+| --- | --- | --- |
+| `platCode/targetPlatCode` | 整数（uint16 范围） | 本艇与目标，不传瞬时经纬度代替目标身份 |
+| `followDistanceMinM` | 数值 | 间距下限，米，≥0 |
+| `followDistanceMaxM` | 数值 | 上限，米，>0，且不小于下限 |
+| `maxSpeed` | 数值 | 本艇航速上限，当前速度口径为节；0 表示无附加任务限制 |
+
+甲方期望状态为 `targetPlatCode/relativeDistanceM/relativeBearingDeg/inRange/distanceOutM/targetSpeed/targetCourse`。相对方位以目标艏向为基准，0°正前、180°正后；越界量在距为 0、过近为负、过远为正。入距仍保持状态 1。甲方说明同时使用“沿航迹尾随”和“水平间距”，弯道中沿轨间距与直线距离的验收口径还需明确。
+
+**当前未注册或实现 `followMode`，直接发送会被拒绝。** 当前距离保持请求是：
+
+```json
+{
+  "simId": "episode", "id": "run", "code": "targetFollowing",
+  "params": {
+    "platCode": 1001, "targetPlatformId": 3001,
+    "minFollowingDistanceM": 100, "maxFollowingDistanceM": 200
+  }
+}
+```
+
+本地仅保持两艇直线中心距，严格要求“两艇半径之和 < 最小距离 < 最大距离”。没有后方/航迹约束，也没有 `maxSpeed`。状态仅回 `targetPlatformId` 和关联扩展，没有完整甲方跟随明细。编码、参数和控制目标都不同，不能仅重命名字段就完成对接。场景到时结束是本地实验终态，不是甲方持续尾随自然完成。
+
+### 4.3 友方伴随：`accompanyMode`
+
+甲方要求在目标体坐标的纵横带内保位，支持稳定后的航向同步。当前已实现同名编码和正式业务字段：
+
+| 字段 | JSON 值类型 | 说明 |
+| --- | --- | --- |
+| `platCode/targetPlatCode` | 整数（uint16 范围） | 本艇与目标，不能相同 |
+| `offsetAlongMinM/offsetAlongMaxM` | 数值 | 纵向闭区间，米；前正后负 |
+| `offsetAcrossMinM/offsetAcrossMaxM` | 数值 | 横向闭区间，米；右舷正、左舷负 |
+| `syncHeading` | 整数 0 或 1 | 0 仅保位，1 稳定后同步航向 |
+| `maxSpeed` | 非负数值 | 节；0 使用物理上限，否则取任务与物理上限较小值 |
+
+```json
+{
+  "simId": "episode", "id": "run", "code": "accompanyMode",
+  "params": {
+    "platCode": 1001, "targetPlatCode": 3001,
+    "offsetAlongMinM": -160, "offsetAlongMaxM": -140,
+    "offsetAcrossMinM": 70, "offsetAcrossMaxM": 90,
+    "syncHeading": 1, "maxSpeed": 0
+  }
+}
+```
+
+两轴须有限且 min≤max，整个允许矩形不能与两艇合并实体包络重叠。当前快照只能含本艇和指定友艇，不支持普通障碍物。
+
+状态回 `targetPlatCode/currentAlongM/currentAcrossM/alongOutM/acrossOutM/inPosition/targetSpeed/targetCourse`。纵横越界量带方向符号，带内为 0；两轴均在原闭区间内时 `inPosition=1`，仍保持状态 1。处理和动作结果取本轮观测，结束通知可携带 Unity 实际末态统计。
+
+体坐标参考以态势运动方向暂代目标艏向，静止时用 `unity_only.target_reference_course_deg`；真实艏向与运动方向不一致时不能沿用此假设。同步策略先保位，阶段见决策层说明。实验到时或实际停车后发送本地完成状态，不表示通过长期稳定伴随验收。
+
+## 5. Unity 采样扩展与完整快照
+
+`unity_only` 是本项目 JSON 扩展，**不是甲方正式报文类型**。主客户端依赖它调度；仅有甲方标准任务和独立实时态势，还不能驱动当前客户端。
+
+任务/停止扩展位于顶层，状态关联扩展位于 `params.unity_only`。扩展先适配成内部观测，不原样全部发送给 Jev。
+
+| 任务/停止扩展字段 | 用途 |
+| --- | --- |
+| `decision_id:string/tick:int` | 单次采样身份与非负物理 tick；Retry 生成新决策 ID |
+| `event:string` | 正常采样、停止或终态事件 |
+| `situation_timestamp:uint32` | 本次全部实体共同态势时戳 |
+| `collision_radii_m:object` | key 为十进制平台 ID 字符串，value 为正实体半径（米）；也作本轮完整实体清单 |
+| `action_duration_s:number` | 本次控制时长，正式控制没有此字段 |
+| `max_speed_knots:number` | 本艇物理速度上限，用于生成动作空间 |
+| `arrival_radius_m:number` | 只在航线及其 STOP 中提供，独立于转弯半径 |
+| `stop_speed_knots:number` | 停车阈值；立即停止使用约等于 0 的独立阈值 |
+| `target_reference_course_deg:number` | 伴随静止目标的体坐标参考方向 |
+| `execution:object` | 下列运动配置、艏向和保持目标状态 |
+
+`execution` 字段：
+
+- `motion_model="bounded_acceleration"`。
+- `max_acceleration_mps2/max_deceleration_mps2/max_yaw_rate_deg_s/max_angular_acceleration_deg_s2`：运动能力。
+- `fixed_dt_s/hull_length_m/hull_beam_m`：物理步长、长宽。
+- `heading_course_deg/yaw_rate_deg_s`：实际艏向和角速度，北起/顺时针为正，静止仍有效。
+- `active_target_course_deg/active_course_error_deg`：保持中的航向目标及未取模角差，可为空，用于转向分支预测。
+- `obstacle_avoidance_radii_m`：按普通障碍物 ID 给安全半径，与实体半径分开。
+
+接收规则：
+
+1. Unity 先发各实体态势，再发任务/停止；Python 允许乱序到达。
+2. 以快照时戳和半径表中的**全部平台 ID**汇齐；本艇和指定目标也参加屏障。
+3. 缺实体不调用模型，超过 3 秒失败；态势缓存同样保留 3 秒，消费后删除，不从上一轮补齐。
+4. 同任务重复决策 ID 不重复调用，更旧 tick 拒绝，同 tick 新 Retry 可接纳。新任务撤销旧等待与输出资格，退休身份不重新激活。
+5. STOP 只复用任务配置，仍需新态势。Python 重启丢失上下文后直接停车会失败，需要先恢复任务通信。
+
+## 6. 控制配对、结束与失败
+
+`0x0662` 本身不含任务或决策 ID，本地用两层关联避免迟到控制作用于新实验：
+
+- `0x0664.params.unity_only` 回显 `decision_id/tick`；动作结果再附 `control_timestamp`，等于对应控制头时戳。processing 不带控制时戳。
+- Unity 等控制与状态配齐，再验证 `simId/id/decision_id/tick`、当前参数和本艇编码，才执行量化控制。旧运行/采样不执行，终态不被迟到执行中状态覆盖。
+
+| 本地事件 | 通信与处理 |
+| --- | --- |
+| `decision_request` | `0x0660` + 当前采样，正常决策 |
+| `stop_request` | `0x0666` + 当前采样，保留任务类型，暂停原目标，交给 Jev 制动 |
+| `mission_completed` | 用 `0x0660` 扩展事件通知，Python 回状态 2 并退休任务 |
+| `stop_completed` | 实际停稳后通知，回状态 2，Unity 进入 Stopped |
+| `simulation_collision` | 通知碰撞，撤销输出并退休任务，不伪造算法完成或状态 3 |
+| `simulation_cancelled` | Python 支持的取消事件，当前 Unity 主路径未主动发送 |
+
+终态通知不调用模型，也不要求正常决策的完整扩展。跟随/伴随进入目标带内不完成，其本地实验由场景时长结束。STOP 期间暂停正常完成判定，到实际停稳才结束；实体碰撞始终优先。
+
+API、答案解析、无效观测等错误有可关联身份时回状态 3。没有自动业务重发、丢包重传或本地备用动作，使用者通过 Retry 重新采样。当前两种 HTTP 传输均未设置有限请求超时，调用挂起可能一直等待；快照 3 秒超时不是 Jev 推理超时。
+
+## 7. 单位、执行与模型接口
+
+### 单位和坐标
+
+| 数据 | 当前约定 |
+| --- | --- |
+| 任务/状态 JSON 速度、态势速度、控制速度 | 节；JSON 为实际数值，二进制按各自精度编码 |
+| 任务 JSON 经纬度 | 实际度数，不再乘二进制经纬度比例 |
+| 地图、轨迹、内部几何和物理 | 米、m/s |
+| 航向/运动方向 | 北起顺时针，0°北、90°东 |
+| Unity 世界位置 | +X 东、+Y 北，1 单位=1 米；基点 120.5°E、30.2°N |
+| Jev 展示 | 默认速度节、距离米；`--jev-speed-unit mps` 只改模型表达，不改通信 |
+
+`1 节 = 1852/3600 m/s`。Unity 内部 `HeadingDeg` 使用另一角度表示，由 `ObservationBuilder` 转成协议艏向，不要直接当北起航向。`targetSpeed` 是实际速度，控制 `Speed` 是目标速度；`direction` 是方位，不是 `targetCourse`。
+
+### 物理执行
+
+场景及默认配置：前进上限 50 节，加速 1.46 m/s²、减速 1.75 m/s²、角速度 12°/s、角加速度 4°/s²；长 11.6 米、宽 3.4 米。实体半径为半对角线，约 6.044 米，打卡半径默认其 5 倍，约 30.22 米。参数可调并经扩展传给 Python。
+
+航速/航向受加减速和角加减速限制，不能瞬时跳变；相同目标延续转向分支，零速指令不能原地转艏。当前使用固定能力上限；已核对[真实船 CSV](../甲方接口/0-50KN.csv)，固定加速响应及角加速度限制与观测存在差异，尚未完成校准，见[核对记录](../bian_local/Jev仿真实验记录.md#2026-10-29实船数据与-unity-参数核对)。
+
+普通障碍物默认小/大目标安全半径 50/90 米、实体半径 3/12 米；侵入安全圈只记录，实体接触才失败。Unity 按运动中的相对扫掠判碰，碰撞优先于同一步完成。模型对普通障碍物冻结当前位置计算净距，不能据此保证动态避障安全。
+
+### Jev HTTPS 接口
+
+默认 `POST https://api.typesafe.ai/v1/systemone`，模型 `jev-latest`，使用 Bearer 凭据。`--endpoint/--model` 可覆盖默认值；当前入口读取 `boat_client.py` 中的 `API_KEY` 常量。
+
+请求正文为 `model/state/questions`，`questions.action.type="choice"`，`criteria` 为候选 ID 到描述字符串的映射。候选数、速度上限和各任务事实见[决策层各任务章节](../../jev_api/README.md)。客户端期待：
+
+```json
+{"answers":{"action":{"type":"choice","choice":"speed_0__north"}}}
+```
+
+客户端验证题型和候选 ID，再按本轮动作空间映射航速/航向，不接受任意生成的控制数值。请求不包含目标未来脚本或隐藏整段轨迹。
+
+候选配置按任务选择：航线与距离保持为 8 档速度 × 8 航向（64 个，45° 间隔），友方伴随为 8 档速度 × 16 航向（128 个，22.5° 间隔）；STOP 沿用所属任务配置。该差异属于 Python 决策配置，不增加 UDP 字段，Unity 继续执行实际航速/航向控制。
+
+若返回 HTTP 400，终端错误及 JSONL 的 `timings.http_error_body` 会保留最多 4096 字节的服务端原因。例如 `max_tokens_exceeded` 表示输入超出模型预算；带障碍物、恢复阶段和停车题目应单独验证，不能仅以简单初始样本判断请求可用。
+
+默认 `--http-transport persistent`，每线程独立复用 HTTPS 连接并预连接；`urllib` 是兼容路径。预连接不发决策请求，失败也不自动重发业务。默认单 worker，只保留一个最新待执行观测。
+
+JSONL 保存身份、观测、payload、原始响应、动作及计时，不记录 Authorization；状态不承载完整模型响应。`wait_headers_s` 包含网络和服务端等待，不能直接当纯推理时间。
+
+## 8. 甲方要求与接入差异
+
+| 项目 | 甲方说明/定义 | 当前主项目与后续要求 |
+| --- | --- | --- |
+| 调度 | 行为树异步下发，tick 不阻塞等完成 | Unity 暂停等每次决策；实时接入需处理持续运动、旧指令保持和失效策略 |
+| 输入 | 按平台编码读取持续态势 | 依赖扩展、同次时戳及实体清单，标准实时输入不能直接驱动 |
+| 回传 | 状态回行为树，控制到动力系统 | 目前统一回 Unity，现场需分离端点 |
+| 航线速度/半径 | 计划航速、转弯半径 | 本地圈内上限、独立打卡圈，未实现转弯半径约束 |
+| 航线进度 | 下一点、剩余航程/时间、完成率等 | 主客户端仅 currentRoute，需补齐明细 |
+| 敌方跟随 | followMode，路径型后方尾随，含限速 | 尚未实现；targetFollowing 只保直线距离 |
+| 友方伴随 | accompanyMode，体坐标带和航向同步 | 字段已支持；无普通障碍物，运动方向代艏向，静止参考依赖扩展 |
+| 持续任务终态 | 在距/到位仍执行，直到停止 | 本地到时结束并报告完成，不能直接作为甲方任务自然终态 |
+| 平台能力 | 应反映实际平台 | 当前简化运动，实船校准仍待办 |
+
+已同步修正[甲方说明](../甲方接口/对接单艇决策服务.md)的控制平台宽度、经纬度/JSON 表述、续发索引、完成率实现口径及重复标题。甲方跟随要求保留，不能为了匹配本地距离保持而改写其业务含义。改进项见[本地待办](../bian_local/Jev请求优化代办清单.md)。

@@ -7,7 +7,8 @@ import unittest
 
 import test_navigation as navigation
 from test_navigation import geo, packet
-from choice_control import build_payload, ACTION_CHOICES
+from choice_control import build_payload
+from action_space import ACCOMPANY_ACTION_CHOICES as ACTION_CHOICES
 from geometry.accompany import project, interval_error
 from protocol.frames import TASK, STOP
 from protocol.unity_snapshot import UnitySnapshotAdapter

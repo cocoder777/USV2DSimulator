@@ -49,7 +49,7 @@ def model_speed_units(builder):
             return value
         criteria = payload["questions"]["action"]["criteria"]
         if observation['task']['code'] == 'targetFollowing' and observation.get('operation') == 'execute':
-            # Keep numeric facts lossless, but avoid repeating long column names 128 times.
+            # Keep numeric facts lossless without repeating column names per choice.
             columns = [k for k in next(iter(criteria.values())) if k not in ('warnings', 'turn_error_deg')]
             payload['state']['candidate_value_columns'] = columns
             payload['state']['candidate_schema']['encoding'] = (

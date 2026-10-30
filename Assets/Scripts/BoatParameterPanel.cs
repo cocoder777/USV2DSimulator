@@ -113,7 +113,7 @@ public class BoatParameterPanel : MonoBehaviour
                         && TryNumber(specialCourse, out var course) && s.Configure(angle, speed, distance, target, course)
                         ? null : "Use bearing [0,360), achievable own speed, positive centre distance.";
                 if (specialError != null) GUILayout.Label(specialError, hintStyle);
-                GUILayout.Label($"Active: {s.ExpectedAngle:F1} deg / {s.ExpectedSpeedKnots:F1} knots / {s.ExpectedDistance:F1} m", labelStyle);
+                GUILayout.Label($"Active: {s.ExpectedAngle:F1} deg / {s.expectedImpactSpeedKnots:F1} knots / {s.ExpectedDistance:F1} m", labelStyle);
                 GUILayout.Label($"Target: {s.Speed / DiscreteAction.MetresPerSecondPerKnot:F1} knots | course {s.Course:F1} deg", labelStyle);
                 GUILayout.Label(s.ScenarioIndex == 0 ? "Target holds a straight course and speed."
                     : s.ScenarioIndex == 1 ? "Target starts turning at 6 s."

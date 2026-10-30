@@ -10,7 +10,7 @@ from matplotlib.patches import Circle, Wedge
 
 
 def plot_run(document, output):
-    if document.get("task_mode") == "SpecialTargetTrackMode":
+    if document.get("task_mode") == "TargetImpactMode":
         return plot_special_track(document, output)
     if document.get("task_mode") == "accompanyMode":
         return plot_accompany(document, output)

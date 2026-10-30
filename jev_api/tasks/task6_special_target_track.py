@@ -15,10 +15,10 @@ def validate_params(params):
     params.setdefault('expectedDistance', 1.0)
     if (type(params.get('targetBatch')) is not int or not 0 <= params['targetBatch'] <= 0xFFFFFFFF
             or any(type(params.get(k)) not in (int, float) or not math.isfinite(params[k])
-                   for k in ('expectedAngleDeg', 'expectedSpeed', 'expectedDistance'))
-            or not 0 <= params['expectedAngleDeg'] < 360 or params['expectedSpeed'] < 0
+                   for k in ('expectedImpactAngleDeg', 'expectedImpactSpeed', 'expectedDistance'))
+            or not 0 <= params['expectedImpactAngleDeg'] < 360 or params['expectedImpactSpeed'] < 0
             or params['expectedDistance'] <= 0):
-        raise ValueError('Invalid SpecialTargetTrackMode parameters')
+        raise ValueError('Invalid TargetImpactMode parameters')
 
 
 def target_platform_id(params):
@@ -47,10 +47,10 @@ def adapt_observation(params, local, records, obs, state):
     reference = course if course is not None else local['target_reference_course_deg']
     if type(reference) not in (int, float) or not math.isfinite(reference) or not 0 <= reference < 360:
         raise ValueError('Invalid target reference course')
-    if params['expectedSpeed'] > local['max_speed_knots']:
+    if params['expectedImpactSpeed'] > local['max_speed_knots']:
         raise ValueError('Expected speed exceeds current own-boat capability')
     obs['target'] = dict(target, radius_m=local['collision_radii_m'][str(pid)])
-    obs['task'] = dict(params, code='SpecialTargetTrackMode', reference_course_deg=reference)
+    obs['task'] = dict(params, code='TargetImpactMode', reference_course_deg=reference)
     tick = local['tick']
     previous = state.get('special_motion')
     yaw = acceleration = 0.0
@@ -86,7 +86,7 @@ def validate_observation(obs, finite):
             and (target['targetCourse'] is None and target['targetSpeed'] == 0
                  or finite(target['targetCourse']) and 0 <= target['targetCourse'] < 360)
             and finite(obs['task']['reference_course_deg']) and 0 <= obs['task']['reference_course_deg'] < 360
-            and obs['task']['expectedSpeed'] <= max(obs['action_space']['speeds_knots']))
+            and obs['task']['expectedImpactSpeed'] <= max(obs['action_space']['speeds_knots']))
 
 
 def build_payload(obs, model='jev-latest'):
@@ -138,7 +138,7 @@ def build_payload(obs, model='jev-latest'):
             criteria[name]['guidance_error_deg'] = [abs(course_error(command_course,terminal_guidance['course_deg'])),
                 abs(course_error(motion['end_course_deg'],terminal_guidance['course_deg']))]
     state = dict(task=dict(mode='special_target_track', stage=approach['stage'],
-        expected_bearing_deg=task['expectedAngleDeg'], expected_speed_mps=task['expectedSpeed']*KNOT_MPS,
+        expected_bearing_deg=task['expectedImpactAngleDeg'], expected_speed_mps=task['expectedImpactSpeed']*KNOT_MPS,
         expected_distance_m=task['expectedDistance'],
         position_capture_radius_m=boat['collision_radius_m'],
         completion='Local experiment freezes on first entry into the position capture circle and records all errors; this is NOT four-condition acceptance.'),

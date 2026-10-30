@@ -12,7 +12,7 @@ public sealed class SpecialTrackTarget : MonoBehaviour
     public FollowingScenarioData Scenario { get; private set; }
     public int ScenarioIndex { get; private set; }
     public float ExpectedAngle { get; private set; }
-    public float ExpectedSpeedKnots { get; private set; } = 25;
+    public float expectedImpactSpeedKnots { get; private set; } = 25;
     public float ExpectedDistance { get; private set; } = 15;
     public float TargetSpeedKnots { get; private set; } = 10;
     public float InitialCourse { get; private set; }
@@ -26,7 +26,7 @@ public sealed class SpecialTrackTarget : MonoBehaviour
     public float Bearing { get; private set; }
     public float BearingError { get; private set; }
     public float DistanceError => Distance - ExpectedDistance;
-    public float SpeedError => boat.Speed / DiscreteAction.MetresPerSecondPerKnot - ExpectedSpeedKnots;
+    public float SpeedError => boat.Speed / DiscreteAction.MetresPerSecondPerKnot - expectedImpactSpeedKnots;
     public float PointingError { get; private set; }
     public float PositionError { get; private set; }
     public float MinimumClearance { get; private set; }
@@ -46,7 +46,7 @@ public sealed class SpecialTrackTarget : MonoBehaviour
         if (Array.Exists(new[] { angle, speed, distance, targetSpeed, course }, v => !BoatDynamics2D.IsFinite(v))
             || angle < 0 || angle >= 360 || speed < 0 || speed > boat.maxForwardSpeed / DiscreteAction.MetresPerSecondPerKnot
             || distance <= 0 || targetSpeed < 0 || targetSpeed > 200) return false;
-        ExpectedAngle = angle; ExpectedSpeedKnots = speed; ExpectedDistance = distance;
+        ExpectedAngle = angle; expectedImpactSpeedKnots = speed; ExpectedDistance = distance;
         TargetSpeedKnots = targetSpeed; InitialCourse = BoatDynamics2D.NormalizeDegrees(course);
         return GetComponent<MissionManager>().SelectSpecialTrackScenario(ScenarioIndex);
     }
@@ -54,7 +54,7 @@ public sealed class SpecialTrackTarget : MonoBehaviour
     public FollowingScenarioData BuildScenario(int index)
     {
         if (ExpectedDistance <= 0
-            || ExpectedSpeedKnots > boat.maxForwardSpeed / DiscreteAction.MetresPerSecondPerKnot)
+            || expectedImpactSpeedKnots > boat.maxForwardSpeed / DiscreteAction.MetresPerSecondPerKnot)
             throw new FormatException("Special-track distance must be positive and speed within current capability settings.");
         float along = ExpectedDistance * Mathf.Cos(ExpectedAngle * Mathf.Deg2Rad);
         float across = ExpectedDistance * Mathf.Sin(ExpectedAngle * Mathf.Deg2Rad);
@@ -103,7 +103,7 @@ public sealed class SpecialTrackTarget : MonoBehaviour
     }
 
     public JObject Parameters() => new JObject { ["platCode"] = 1001, ["targetBatch"] = TargetBatch,
-        ["expectedAngleDeg"] = ExpectedAngle, ["expectedSpeed"] = ExpectedSpeedKnots, ["expectedDistance"] = ExpectedDistance };
+        ["expectedImpactAngleDeg"] = ExpectedAngle, ["expectedImpactSpeed"] = expectedImpactSpeedKnots, ["expectedDistance"] = ExpectedDistance };
 
     public JObject Observe()
     {

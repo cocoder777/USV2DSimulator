@@ -19,7 +19,7 @@ class SpecialTrackGeometry:
         self.yaw = estimate.get('yaw_deg_s', 0)
         self.acceleration = estimate.get('acceleration_mps2', 0)
         self.cache = {}
-        expected = self.task['expectedSpeed']*KNOT_MPS
+        expected = self.task['expectedImpactSpeed']*KNOT_MPS
         execution = obs['execution']
         for key in ('max_yaw_rate_deg_s','max_angular_acceleration_deg_s2','max_acceleration_mps2','max_deceleration_mps2'):
             value = execution[key]
@@ -27,7 +27,7 @@ class SpecialTrackGeometry:
                 raise ValueError('Invalid special-track physical limit: '+key)
         nominal_radius = expected/math.radians(execution['max_yaw_rate_deg_s'])
         turn_time = 180/execution['max_yaw_rate_deg_s']+2*execution['max_yaw_rate_deg_s']/execution['max_angular_acceleration_deg_s2']
-        closing = max(0,expected+self.speed*math.cos(math.radians(self.task['expectedAngleDeg'])))
+        closing = max(0,expected+self.speed*math.cos(math.radians(self.task['expectedImpactAngleDeg'])))
         acceleration_room = expected*expected/(2*execution['max_acceleration_mps2'])
         # Also reserve the distance the target closes during turn/speed setup;
         # two turn radii alone left too little time to regain terminal speed.
@@ -37,15 +37,15 @@ class SpecialTrackGeometry:
                                   obs['execution']['heading_course_deg'])
 
     def setup_error(self, relative, course):
-        f = direction(course+self.task['expectedAngleDeg'])
+        f = direction(course+self.task['expectedImpactAngleDeg'])
         return math.hypot(*(relative[j]-(self.task['expectedDistance']+self.setup_length)*f[j] for j in (0, 1)))
 
     def terminal_guidance(self, horizon):
         # A short observed-motion interception reference; no chosen command/speed.
-        travel = self.task['expectedSpeed']*KNOT_MPS+self.speed
+        travel = self.task['expectedImpactSpeed']*KNOT_MPS+self.speed
         t = min(horizon,max(self.obs['planning']['action_duration_s'],self.current['position_error_m']/max(travel,1e-6)))
         target, course = self.target_at(t)
-        forward = direction(course+self.task['expectedAngleDeg'])
+        forward = direction(course+self.task['expectedImpactAngleDeg'])
         delta = tuple(target[j]+self.task['expectedDistance']*forward[j]-self.relative[j] for j in (0,1))
         return dict(course_deg=math.degrees(math.atan2(*delta))%360 if math.hypot(*delta)>1e-8 else self.current['terminal_heading_deg'],
                     target_prediction_time_s=t)
@@ -55,7 +55,7 @@ class SpecialTrackGeometry:
         e = self.obs['execution']; c = self.current
         incoming = direction(c['terminal_heading_deg'])
         side = (incoming[1], -incoming[0])
-        forward = direction(self.course+self.task['expectedAngleDeg'])
+        forward = direction(self.course+self.task['expectedImpactAngleDeg'])
         q = tuple(self.relative[j]-self.task['expectedDistance']*forward[j] for j in (0, 1))
         outside = -sum(x*y for x,y in zip(q,incoming))
         lateral = sum(x*y for x,y in zip(q,side))
@@ -67,7 +67,7 @@ class SpecialTrackGeometry:
             angle, yaw = bounded_turn(delta,-e['yaw_rate_deg_s'],e['max_yaw_rate_deg_s'],e['max_angular_acceleration_deg_s2'],mid)
             if abs(angle-delta)<1e-6 and abs(yaw)<1e-6: hi=mid
             else: lo=mid
-        expected = self.task['expectedSpeed']*KNOT_MPS
+        expected = self.task['expectedImpactSpeed']*KNOT_MPS
         actual = self.obs['boat']['targetSpeed']*KNOT_MPS
         speed_time = abs(expected-actual)/(e['max_acceleration_mps2'] if expected>=actual else e['max_deceleration_mps2'])
         vt = tuple(self.speed*x for x in direction(self.course))
@@ -113,17 +113,17 @@ class SpecialTrackGeometry:
     def facts(self, relative, course, speed, heading):
         distance = math.hypot(*relative)
         bearing = (math.degrees(math.atan2(relative[0], relative[1])) - course) % 360
-        f = direction(course + self.task['expectedAngleDeg'])
+        f = direction(course + self.task['expectedImpactAngleDeg'])
         error = tuple(relative[j] - self.task['expectedDistance'] * f[j] for j in (0, 1))
         pointing = (math.degrees(math.atan2(-relative[0], -relative[1]))) % 360
         return dict(distance_m=distance, bearing_deg=bearing,
                     distance_error_m=distance-self.task['expectedDistance'],
-                    bearing_error_deg=course_error(bearing, self.task['expectedAngleDeg']),
-                    speed_error_mps=speed-self.task['expectedSpeed']*KNOT_MPS,
+                    bearing_error_deg=course_error(bearing, self.task['expectedImpactAngleDeg']),
+                    speed_error_mps=speed-self.task['expectedImpactSpeed']*KNOT_MPS,
                     pointing_error_deg=course_error(heading, pointing),
                     position_error_m=math.hypot(*error), actual_speed_mps=speed,
                     heading_deg=heading, pointing_course_deg=pointing,
-                    terminal_heading_deg=(course+self.task['expectedAngleDeg']+180) % 360)
+                    terminal_heading_deg=(course+self.task['expectedImpactAngleDeg']+180) % 360)
 
     def at(self, position, speed, heading, t):
         target, course = self.target_at(t)
@@ -140,7 +140,7 @@ class SpecialTrackGeometry:
             t = min(i*dt, duration)
             target, course = self.target_at(t)
             relative = tuple(self.relative[j] + point[j] - target[j] for j in (0, 1))
-            f = direction(course+self.task['expectedAngleDeg'])
+            f = direction(course+self.task['expectedImpactAngleDeg'])
             error = math.hypot(*(relative[j]-self.task['expectedDistance']*f[j] for j in (0, 1)))
             if closest is None or error < closest['position_error_m']:
                 closest = dict(t_s=t, position=point, position_error_m=error)

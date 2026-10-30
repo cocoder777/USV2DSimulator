@@ -19,9 +19,9 @@ from tasks import task6_special_target_track
 
 def wire(stationary=False):
     task, records = accompany_wire(stationary=stationary)
-    task['code'] = 'SpecialTargetTrackMode'
-    task['params'] = dict(platCode=1001, targetBatch=30015, expectedAngleDeg=0,
-                          expectedSpeed=25, expectedDistance=15)
+    task['code'] = 'TargetImpactMode'
+    task['params'] = dict(platCode=1001, targetBatch=30015, expectedImpactAngleDeg=0,
+                          expectedImpactSpeed=25, expectedDistance=15)
     records[1]['batch'] = 30015
     return task, records
 
@@ -55,12 +55,12 @@ class SpecialTrackTests(unittest.TestCase):
         for key, value in (('expectedDistance', 0), ('expectedDistance', -1),
                            ('expectedDistance', None), ('expectedDistance', math.inf),
                            ('expectedDistance', math.nan), ('expectedDistance', True),
-                           ('expectedDistance', '1'), ('expectedAngleDeg', 360),
-                           ('expectedSpeed', -1), ('targetBatch', -1)):
+                           ('expectedDistance', '1'), ('expectedImpactAngleDeg', 360),
+                           ('expectedImpactSpeed', -1), ('targetBatch', -1)):
             task, _ = wire(); task['params'][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 UnitySnapshotAdapter().add_task(task, TASK)
-        task, records = wire(); task['params']['expectedSpeed'] = 51
+        task, records = wire(); task['params']['expectedImpactSpeed'] = 51
         adapter = UnitySnapshotAdapter(); adapter.add_task(task, TASK)
         for r in records: adapter.add_situation(r)
         self.assertIn('capability', adapter.ready()[0][2])
@@ -92,7 +92,7 @@ class SpecialTrackTests(unittest.TestCase):
     def test_terminal_geometry_distinguishes_position_and_bow_angles(self):
         _, _, request = adapted(); g = SpecialTrackGeometry(request['observation'])
         for bearing in (0, 90, 180, 270):
-            g.task['expectedAngleDeg'] = bearing
+            g.task['expectedImpactAngleDeg'] = bearing
             a = math.radians(bearing)
             relative = (15*math.sin(a), 15*math.cos(a))
             f = g.facts(relative, 0, 25*KNOT_MPS, (bearing+180)%360)

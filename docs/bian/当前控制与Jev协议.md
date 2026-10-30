@@ -247,11 +247,11 @@ Excel 控制字段名大写开头，JSON 业务对象用 `platCode/speed/course`
 
 体坐标参考以态势运动方向暂代目标艏向，静止时用 `unity_only.target_reference_course_deg`；真实艏向与运动方向不一致时不能沿用此假设。同步策略先保位，阶段见决策层说明。实验到时或实际停车后发送本地完成状态，不表示通过长期稳定伴随验收。
 
-### 4.4 特殊目标追踪：`SpecialTargetTrackMode`
+### 4.4 特殊目标追踪：`TargetImpactMode`
 
-正式参数为 `platCode/targetBatch/expectedAngleDeg/expectedSpeed/expectedDistance`。本地平台编码、控制编码及位宽均沿用现有实现，不为新任务改动。以当前完整快照的 `batch` 匹配目标，再用其 `platformId` 关联实体半径；不存在或不唯一则拒绝。本地目标 `platformId=3001`、`batch=30015`。
+正式参数为 `platCode/targetBatch/expectedImpactAngleDeg/expectedImpactSpeed/expectedDistance`。本地平台编码、控制编码及位宽均沿用现有实现，不为新任务改动。以当前完整快照的 `batch` 匹配目标，再用其 `platformId` 关联实体半径；不存在或不唯一则拒绝。本地目标 `platformId=3001`、`batch=30015`。
 
-`expectedAngleDeg` 是目标船头起算、顺时针增加的位置方位：0° 前、90° 右、180° 后、270° 左。距离为中心距（米），速度为本艇实际航速（节）。目标艏向等于运动方向，停车仍用 `unity_only.target_reference_course_deg`。指定距离须超过两艇实体半径之和，期望速度不能超过当前物理上限。
+`expectedImpactAngleDeg` 是目标船头起算、顺时针增加的位置方位：0° 前、90° 右、180° 后、270° 左。距离为中心距（米），速度为本艇实际航速（节）。目标艏向等于运动方向，停车仍用 `unity_only.target_reference_course_deg`。指定距离须超过两艇实体半径之和，期望速度不能超过当前物理上限。
 
 新任务仅支持本艇与目标，使用组织接近 / 末段达成两类执行请求及原 128 候选。正常决策回状态 1 和 5.6 规定的九个业务字段；`angleErrorDeg` 仍是位置方位误差，船头指向误差等诊断放 `params.unity_only`，并与 `decision_id/tick/control_timestamp` 合并保留。
 

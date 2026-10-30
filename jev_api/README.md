@@ -158,7 +158,7 @@ sequenceDiagram
 
 ## 任务六：特殊目标追踪
 
-编码 `SpecialTargetTrackMode`，实现为 `tasks/task6_special_target_track.py` 和 `geometry/special_target_track.py`。输入使用 `platCode/targetBatch/expectedAngleDeg/expectedSpeed/expectedDistance`，平台编码与二进制布局沿用项目现有实现。目标以同次完整态势的 `batch` 查找，不能将批号作为平台编码；目标运动方向等于船头朝向，停车用采样扩展参考方向。
+编码 `TargetImpactMode`，实现为 `tasks/task6_special_target_track.py` 和 `geometry/special_target_track.py`。输入使用 `platCode/targetBatch/expectedImpactAngleDeg/expectedImpactSpeed/expectedDistance`，平台编码与二进制布局沿用项目现有实现。目标以同次完整态势的 `batch` 查找，不能将批号作为平台编码；目标运动方向等于船头朝向，停车用采样扩展参考方向。
 
 期望角为目标船头起算、顺时针增加的位置方位。期望点为目标位置沿“目标航向＋期望方位”偏移期望距离；在该点本艇期望艏向为“目标航向＋期望方位＋180°”。距离、位置方位、实际航速和本艇对准目标的艏向误差必须按同一时刻计算。
 

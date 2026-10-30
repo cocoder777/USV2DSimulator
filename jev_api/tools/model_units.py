@@ -83,7 +83,7 @@ def model_speed_units(builder):
                 row = [rounded(facts[k], 1 if k.endswith(('_m', '_deg')) else 3) for k in columns]
                 criteria[name] = json.dumps(rounded(row), ensure_ascii=False,
                                             allow_nan=False, separators=(",", ":"))
-        if observation['task']['code'] == 'SpecialTargetTrackMode':
+        if observation['task']['code'] == 'TargetImpactMode':
             for name, facts in criteria.items():
                 unit, speed_key = ('knots','command_speed_knots') if 'command_speed_knots' in facts else ('m/s','command_speed_mps')
                 suffix = 'knots' if unit=='knots' else 'mps'

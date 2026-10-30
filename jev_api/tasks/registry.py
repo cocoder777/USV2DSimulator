@@ -12,7 +12,7 @@ TASKS = {
     "trackingMode": task1_waypoint,
     "followMode": task2_following,
     "accompanyMode": task3_accompany,
-    "SpecialTargetTrackMode": task6_special_target_track,
+    "TargetImpactMode": task6_special_target_track,
 }
 
 

@@ -160,7 +160,7 @@ public class BoatUdpBridge : MonoBehaviour
                             {
                                 var status = reassembler.Add(data, source.ToString());
                                 if (status == null) continue;
-                                if ((string)status["code"] is not ("trackingMode" or "followMode" or "accompanyMode" or "SpecialTargetTrackMode")) throw new FormatException("Unexpected algorithm code.");
+                                if ((string)status["code"] is not ("trackingMode" or "followMode" or "accompanyMode" or "TargetImpactMode")) throw new FormatException("Unexpected algorithm code.");
                                 if ((int?)status["status"] is not (1 or 2 or 3)) throw new FormatException("Invalid algorithm status.");
                                 var meta = status["params"]?["unity_only"] as JObject;
                                 var result = StatusEnvelope(status, meta);

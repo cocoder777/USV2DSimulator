@@ -70,10 +70,12 @@ public sealed class AccompanyTarget : MonoBehaviour
         if (index < 0 || index >= ScenarioNames.Length) throw new FormatException("Invalid accompany scenario.");
         if (!BoatDynamics2D.IsFinite(DurationSeconds) || DurationSeconds <= 0) throw new FormatException("Invalid experiment duration.");
         var f = FollowingTarget.Direction(InitialReferenceCourse); var right = new Vector2(f.y, -f.x);
-        // Outside every configured band; no teleport-to-position start.
-        float along = AlongMin - 80;
-        float across = (AcrossMin + AcrossMax) / 2;
-        across = across >= 0 ? AcrossMax + 80 : AcrossMin - 80;
+        // Keep the default start independent of the requested offset. Moving both
+        // the band and the boat made edits look ineffective in the boat-follow camera.
+        float along = -240, across = 170;
+        // Still start outside the band if the user moves it over the default start.
+        if (along >= AlongMin && along <= AlongMax && across >= AcrossMin && across <= AcrossMax)
+            along = AlongMin - 80;
         var initial = f * along + right * across;
         // A sustained turn must exercise more than a complete revolution after acquisition.
         float duration = index == 1 ? Mathf.Max(DurationSeconds, 360)

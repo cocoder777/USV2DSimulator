@@ -11,6 +11,7 @@ public class BoatParameterPanel : MonoBehaviour
     private string minimumDistance = "100", maximumDistance = "200", followingMaxSpeed = "0", followingError;
     private string alongMin = "-160", alongMax = "-140", acrossMin = "70", acrossMax = "90";
     private string accompanyMaxSpeed = "0", targetSpeed = "10", referenceCourse = "0", accompanyError;
+    private bool accompanySettingsApplied;
     private bool syncHeading = true;
     private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
     private static readonly string[] decisionModes = { "Paused", "Continuous" };
@@ -98,6 +99,8 @@ public class BoatParameterPanel : MonoBehaviour
                 int scenario = GUILayout.SelectionGrid(a.ScenarioIndex, AccompanyTarget.ScenarioNames, 2);
                 if (scenario != a.ScenarioIndex) mission.SelectAccompanyScenario(scenario);
                 GUILayout.Label("Own 1001 / friendly target 3001. No obstacles.", hintStyle);
+                bool changedBeforeSettings = GUI.changed;
+                GUI.changed = false;
                 DrawRange("Along min / max (m)", ref alongMin, ref alongMax);
                 DrawRange("Across min / max (m)", ref acrossMin, ref acrossMax);
                 GUILayout.Label("Along: +forward / -behind. Across: +right / -left.", hintStyle);
@@ -106,6 +109,9 @@ public class BoatParameterPanel : MonoBehaviour
                 accompanyMaxSpeed = GUILayout.TextField(accompanyMaxSpeed);
                 GUILayout.Label("Target speed (knots) / initial direction (deg)", hintStyle);
                 GUILayout.BeginHorizontal(); targetSpeed = GUILayout.TextField(targetSpeed); referenceCourse = GUILayout.TextField(referenceCourse); GUILayout.EndHorizontal();
+                if (GUI.changed) { accompanySettingsApplied = false; accompanyError = null; }
+                GUI.changed |= changedBeforeSettings;
+                GUILayout.Label("Edit bounds, then Apply to move / resize the cyan band and reset.", hintStyle);
                 if (GUILayout.Button("Apply accompany settings and reset"))
                 {
                     accompanyError = TryNumber(alongMin, out var amin) && TryNumber(alongMax, out var amax)
@@ -113,10 +119,12 @@ public class BoatParameterPanel : MonoBehaviour
                         && TryNumber(accompanyMaxSpeed, out var maximum) && TryNumber(targetSpeed, out var speed)
                         && TryNumber(referenceCourse, out var course) && a.Configure(amin, amax, cmin, cmax, syncHeading, maximum, speed, course)
                         ? null : "Use finite ordered bounds outside target hull, nonnegative speeds.";
+                    accompanySettingsApplied = accompanyError == null;
                 }
                 if (accompanyError != null) GUILayout.Label(accompanyError, hintStyle);
-                GUILayout.Label($"Active along [{a.AlongMin:F0}, {a.AlongMax:F0}] m", labelStyle);
-                GUILayout.Label($"Active across [{a.AcrossMin:F0}, {a.AcrossMax:F0}] m", labelStyle);
+                else if (accompanySettingsApplied) GUILayout.Label("Settings applied. Task reset.", hintStyle);
+                GUILayout.Label($"Active along [{a.AlongMin:F2}, {a.AlongMax:F2}] m", labelStyle);
+                GUILayout.Label($"Active across [{a.AcrossMin:F2}, {a.AcrossMax:F2}] m", labelStyle);
                 GUILayout.Label($"syncHeading={(a.SyncHeading ? 1 : 0)}, maxSpeed={a.MaxSpeedKnots:F1} knots", labelStyle);
                 GUILayout.Label($"Along {a.Along:F1}, across {a.Across:F1} m", labelStyle);
                 GUILayout.Label($"{a.Status} | position rate {a.PositionRate:F2} m/s", labelStyle);
@@ -295,7 +303,12 @@ public class BoatParameterPanel : MonoBehaviour
     void DrawRange(string label, ref string minimum, ref string maximum)
     {
         GUILayout.Label(label, labelStyle);
-        GUILayout.BeginHorizontal(); minimum = GUILayout.TextField(minimum); maximum = GUILayout.TextField(maximum); GUILayout.EndHorizontal();
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("Min", GUILayout.Width(28));
+        minimum = GUILayout.TextField(minimum, GUILayout.MinWidth(60), GUILayout.ExpandWidth(true));
+        GUILayout.Label("Max", GUILayout.Width(28));
+        maximum = GUILayout.TextField(maximum, GUILayout.MinWidth(60), GUILayout.ExpandWidth(true));
+        GUILayout.EndHorizontal();
     }
     static bool TryNumber(string text, out float value) => float.TryParse(text, System.Globalization.NumberStyles.Float,
         System.Globalization.CultureInfo.InvariantCulture, out value);

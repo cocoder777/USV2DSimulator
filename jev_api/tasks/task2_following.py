@@ -1,4 +1,4 @@
-"""Task 2: one rear-point tracking request and an independent STOP."""
+"""Task 2: rear-region maintenance/recovery and an independent STOP."""
 
 import math
 
@@ -6,19 +6,27 @@ from action_space import (FOLLOWING_ACTION_CHOICES as ACTION_CHOICES,
                           FOLLOWING_COURSES_DEG as COURSES_DEG,
                           FOLLOWING_DIRECTIONS as DIRECTIONS, SPEED_FRACTIONS)
 from geometry.coordinates import KNOT_MPS
-from geometry.following import FollowingGeometry, observed_motion
+from geometry.following import FollowingGeometry, observed_motion, request_phase
 from geometry.motion import predict_ground_motion, preview_duration
 from geometry.obstacles import nearby_obstacles, clearance_facts, snapshot_clearance
 from geometry.relative_motion import course_error
 
 
-INSTRUCTIONS = (
+SAFETY_INSTRUCTIONS = (
     'Choose ONE action. First avoid hull contact and preserve NONNEGATIVE safety clearance for ALL hazards. '
     'Brake/turn early using previews; if already unsafe, improve end clearance. '
-    'Then track the ONE rear point, using point errors and the course reference. '
-    'A safe detour may increase point error. Use nonzero speed to turn. '
+    'Use nonzero speed to turn. '
     'Only the first interval executes, then replan; long forecasts assume holding this command.'
 )
+INSTRUCTIONS = {
+    'maintain': SAFETY_INSTRUCTIONS + 'MAINTAIN / SMALL CORRECTION: continue tracking the soft rear point '
+        'using point errors and the course reference. A safe detour may increase point error.',
+    'recover': SAFETY_INSTRUCTIONS + 'LOST / RECOVER: enter the rear interior with margin promptly, then settle. '
+        'Target may keep turning OR straighten: prefer progress shared by both forecasts; do not rely on a continued turn. '
+        'Compare CW/CCW bypass distances and make sustained progress on a safe side; do not alternate sides without cause. '
+        'If too close, separate first. Ahead at matching speed or stopped is not recovered. '
+        'A detour can temporarily increase straight region error. Then resume following.',
+}
 SCHEMA = {
     'motion': 'Commands are target speeds and absolute north-clockwise courses. Zero speed brakes over time and ignores course.',
     'obstacles': 'Obstacle hull/safety clearance arrays=[action min,end,full-preview min,end], metres; <=0 hull contact, <0 safety intrusion. Current-position snapshots, not future obstacle paths.',
@@ -66,6 +74,10 @@ def adapt_observation(params, local, records, obs, state):
                        target_stationary=stationary, target_motion=motion)
     maximum = min(local['max_speed_knots'], params['maxSpeed']) if params['maxSpeed'] > 0 else local['max_speed_knots']
     obs['action_space']['speeds_knots'] = [maximum*f for f in SPEED_FRACTIONS]
+    if obs.get('operation') != 'stop':
+        context = request_phase(FollowingGeometry(obs), state.get('following_phase'))
+        obs['task']['following_request'] = context
+        state['following_phase'] = context['phase']
 
 
 def validate_observation(obs, finite):
@@ -112,14 +124,15 @@ def build_payload(obs, model='jev-latest'):
     times = [duration, 12*duration]
     safety_horizon = max(times[-1], preview_duration(obs['execution'], duration, obs['boat']['targetSpeed']*KNOT_MPS))
     prediction_times = times + ([safety_horizon] if safety_horizon > times[-1] else [])
-    guidance = geometry.guidance(times[-1])
+    context = obs['task'].get('following_request') or request_phase(geometry)
+    phase = context['phase']
     obstacles = nearby_obstacles(obs)
-    state = dict(task=dict(mode='rear_point_following', point_behind_m=geometry.distance,
-                           point_tolerance_m=geometry.tolerance,
+    state = dict(task=dict(mode=phase, classification=context,
+                           allowed_distance_m=[obs['task']['followDistanceMinM'], obs['task']['followDistanceMaxM']],
+                           allowed_relative_bearing_deg=[90,270],
                            minimum_target_distance_m=obs['task']['followDistanceMinM'],
-                           objective='Track the point; it is a soft goal during turns and detours. Continuous until explicit end/STOP.'),
-                 tracking_error_m=geometry.current['tracking_error_m'],
-                 guidance=guidance,
+                           objective='Continue soft rear-point tracking.' if phase == 'maintain' else 'Safely regain the rear region promptly.'),
+                 current_region={k:geometry.current[k] for k in ('distance_m','relative_bearing_deg','in_sector','sector_error_m')},
                  boat=dict(actual_speed_mps=obs['boat']['targetSpeed']*KNOT_MPS,
                            heading_deg=obs['execution']['heading_course_deg'],
                            yaw_deg_s=obs['execution']['yaw_rate_deg_s']),
@@ -127,8 +140,22 @@ def build_payload(obs, model='jev-latest'):
                              observed_motion=obs['task']['target_motion']),
                  combined_hull_radius_m=geometry.combined_radius,
                  forecast_times_s=times, safety_preview_s=safety_horizon,
-                 forecast='Tracking: point behind CURRENT target direction, translated at CURRENT target velocity until replanning. Safety: target observed turn with at most 2s acceleration extrapolation. Own bounded acceleration/yaw. Unknown manoeuvres are not predicted.',
+                 forecast=('Tracking point translates at current target velocity/direction. ' if phase == 'maintain' else
+                           'Recovery region follows the observed target turn. ')
+                           +'Safety retains observed target turn and at most 2s acceleration. Own bounded acceleration/yaw. Only first interval executes. Unknown manoeuvres are not predicted.',
                  obstacles=obstacles, candidate_schema=SCHEMA)
+    if phase == 'recover':
+        state['interior'] = dict(distance_m=[geometry.inner,geometry.outer],
+                                 relative_bearing_deg=[90+geometry.angle_margin,270-geometry.angle_margin])
+        state['region_error_m'] = geometry.region(geometry.relative)['sector_error_m']
+        remaining, references = geometry.bypass(geometry.relative, times[-1])
+        state['bypass_remaining_m'] = remaining
+        state['bypass_reference_courses_deg'] = references
+    else:
+        guidance = geometry.guidance(times[-1])
+        state['task'].update(point_behind_m=geometry.distance,point_tolerance_m=geometry.tolerance)
+        state['tracking_error_m'] = geometry.point_error(geometry.relative)
+        state['guidance'] = guidance
     criteria = {}
     for name, facts, positions, motions in forecasts(obs, geometry, prediction_times, obstacles):
         ranges = [positions[0]['minimum_m'], positions[0]['distance_m'],
@@ -140,14 +167,18 @@ def build_payload(obs, model='jev-latest'):
             hull = [min(a,b) for a,b in zip(hull,facts['obstacle_hull_clearance_m'])]
             safety = [min(a,b) for a,b in zip(safety,facts['obstacle_safety_clearance_m'])]
         facts = dict(speed_mps=facts['speed_mps'], course_deg=facts['course_deg'],
-                     tracking_error_m=[p['tracking_error_m'] for p in positions[:2]],
                      hull_clearance_m=hull, safety_clearance_m=safety)
-        if guidance['course_deg'] is not None:
-            facts['guidance_error_deg'] = [abs(course_error(guidance['course_deg'], c))
-                                           for c in (facts['course_deg'], motions[0]['end_course_deg'])]
+        if phase == 'recover':
+            facts['region_error_m'] = [p['region_error_m'] for p in positions[:2]]
+            facts['coast_region_error_m'] = [p['coast_region_error_m'] for p in positions[:2]]
+            facts['bypass_remaining_m'] = [p['bypass_remaining_m'] for p in positions[:2]]
+        else:
+            facts['tracking_error_m'] = [p['tracking_error_m'] for p in positions[:2]]
+            if guidance['course_deg'] is not None:
+                facts['guidance_error_deg'] = [abs(course_error(guidance['course_deg'],c)) for c in (facts['course_deg'],motions[0]['end_course_deg'])]
         criteria[name] = facts
     return dict(model=model, state=state,
-                questions=dict(action=dict(type='choice', instructions=INSTRUCTIONS, criteria=criteria)))
+                questions=dict(action=dict(type='choice', instructions=INSTRUCTIONS[phase], criteria=criteria)))
 
 
 def build_stop_payload(obs, model='jev-latest'):

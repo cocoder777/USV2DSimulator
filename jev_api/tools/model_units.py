@@ -57,17 +57,22 @@ def model_speed_units(builder):
                 first, last = state['forecast_times_s']
                 criteria[name] = (
                     f"{facts[speed_key]:.3f} {unit}, course {facts['course_deg']:g} deg. "
-                    f"Point error {first:g}/{last:g}s {compact(facts['tracking_error_m'])}m. "
+                    + (f"Region error {compact(facts['region_error_m'])}m. " if 'region_error_m' in facts else f"Point error {compact(facts['tracking_error_m'])}m. ")
                     + (f"Reference deviation command/first {compact(facts['guidance_error_deg'])}deg. " if 'guidance_error_deg' in facts else '')
+                    + (f"Bypass remaining {compact(facts['bypass_remaining_m'])}m. " if 'bypass_remaining_m' in facts else '')
+                    + (f"If target straightens, region error {compact(facts['coast_region_error_m'])}m. " if 'coast_region_error_m' in facts else '')
                     + f"Hull clearance action/long {compact(facts['hull_clearance_m'][::2])}m. "
                     + f"Safety clearance min/end action/long {compact(safety)}m. "
                     + ('SAFETY INTRUSION IN ACTION.' if safety[0] < 0 else 'SAFETY INTRUSION IF HELD.' if safety[2] < 0 else 'Safety clear.')
                 )
             state['candidate_schema'] = {
-                'tracking': 'Point error at forecast_times_s is distance to ONE current-direction rear point minus tolerance, floored at zero. No heading alignment objective.',
+                'tracking': 'Region error at forecast_times_s is distance to the rear interior set, zero inside. Main forecast holds observed target turn; the straightening alternative holds current target direction/speed. Both are hypothetical; prefer progress that survives either. Interior leaves quarter radial width as margin, with equal physical margin at angular edges. Official region is unchanged.',
                 'clearance': 'Hull and safety clearance cover BOTH the moving target and every nearby obstacle. Target safety radius=max(minimum following distance,combined hulls); obstacle safety uses its avoidance circle. Hull arrays=[action min,long min]; safety=[action min,end,long min,end]. Safety<0=intrusion; hull<=0=contact. Minima include shared start; endpoints allow recovery. Ordinary obstacles frozen at current positions.',
-                'reference': 'Heading errors command/actual first are to the position-tracking course reference, accounting for current target velocity and gradual point-error correction. It is not an executable command. All 128 choices remain available.',
+                'bypass': 'Bypass rows=forecast_times_s, columns=[clockwise,counterclockwise] around the target in its predicted rotating frame. Tangent+arc remaining distances to the rear interior; unsafe starts include radial escape. References combine the CURRENT initial relative path direction (distance/12s) with target velocity. Geometric aids, not executable commands or obstacle-aware paths. Compare with current bypass_remaining_m; zero means inside. All 128 choices remain available.',
             }
+            if state['task']['mode'] != 'recover':
+                state['candidate_schema'].pop('bypass')
+                state['candidate_schema']['tracking'] = 'Point error at forecast_times_s is distance to the current-direction rear point minus tolerance, floored at zero. Reference deviations command/actual first are to target velocity plus gradual point-error correction, not heading alignment or an executable command. All 128 choices remain available.'
         elif observation['task']['code'] == 'followMode':
             columns = list(next(iter(criteria.values())))
             payload['state']['candidate_value_columns'] = columns

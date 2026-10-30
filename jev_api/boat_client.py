@@ -12,7 +12,7 @@ from protocol.unity_snapshot import UnitySnapshotAdapter
 from protocol.status import status_content
 from validation import valid_request
 
-API_KEY = "apikey_2180a45feea342e94466a7b4be0e8439285f_2da086b9287fa9932ad47f2067309b66de3d24440dbf189df165df8c54f28c3d"
+API_KEY = "apikey_21784ffc38da031a4f36a81a02fd03f23fe1_5effcf922f6dcbbebd60ba97b3076f8ce1d63d87c7fa405626100d6738286211"
 
 
 def dumps(value):

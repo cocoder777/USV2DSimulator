@@ -381,7 +381,7 @@ class FollowingTests(unittest.TestCase):
         self.assertEqual([o['id'] for o in obs['obstacles']], ['2001'])
         payload = build_payload(obs)
         self.assertEqual(len(payload['questions']['action']['criteria']), 128)
-        self.assertEqual(payload['state']['task']['point_behind_m'], 150)
+        self.assertEqual(payload['state']['task']['mode'], 'maintain')
         self.assertAlmostEqual(payload['state']['tracking_error_m'], 0)
         self.assertNotIn('segments', json.dumps(payload))
 
@@ -407,27 +407,29 @@ class FollowingTests(unittest.TestCase):
             self.assertIn('Safety clearance',b)
         self.assertLess(len(json.dumps(knots).encode('utf-8')), 65000)
 
-    def test_single_point_objective_uses_one_unified_request(self):
+    def test_region_requests_distinguish_maintenance_and_loss(self):
         from geometry.following import FollowingGeometry
         _, obs = self.adapted()
         texts = []
-        for distance, course, speed in [(150, 0, 10), (70, 180, 10), (300, 0, 10), (150, 0, 0)]:
+        for distance, course, speed, phase in [(150, 0, 10, 'maintain'), (70, 180, 10, 'recover'),
+                                               (300, 0, 10, 'recover'), (150, 0, 0, 'maintain')]:
             obs['target'].update(longitude=geo(0,distance)[0], latitude=geo(0,distance)[1], targetCourse=course, targetSpeed=speed)
             obs['task']['reference_course_deg'] = course
-            obs['task'].pop('request_phase',None)
+            obs['task'].pop('following_request',None)
             payload = build_payload(obs)
             texts.append(payload['questions']['action']['instructions'])
-            self.assertEqual(payload['state']['task']['mode'], 'rear_point_following')
+            self.assertEqual(payload['state']['task']['mode'], phase)
+            self.assertEqual('bypass_remaining_m' in payload['state'], phase == 'recover')
             self.assertNotIn('request_variant',obs['task'])
             self.assertNotIn('interior_control_region',payload['state'])
-        self.assertEqual(len(set(texts)),1)
-        self.assertLess(len(texts[0]),900)
+        self.assertEqual(len(set(texts)),2)
+        self.assertTrue(all(len(t)<1100 for t in texts))
         # Same centre distance can mean zero error astern or large error ahead.
         obs['target'].update(longitude=geo(0,150)[0],latitude=geo(0,150)[1])
         obs['task']['reference_course_deg']=0
-        self.assertAlmostEqual(FollowingGeometry(obs).current['tracking_error_m'],0)
+        self.assertAlmostEqual(FollowingGeometry(obs).current['sector_error_m'],0)
         obs['task']['reference_course_deg']=180
-        self.assertAlmostEqual(FollowingGeometry(obs).current['tracking_error_m'],295,places=4)
+        self.assertGreater(FollowingGeometry(obs).current['sector_error_m'],150)
 
     def test_tracking_forecast_separates_progress_from_target_contact(self):
         from tasks.task2_following import build_payload as raw_payload
@@ -436,26 +438,102 @@ class FollowingTests(unittest.TestCase):
         # Pursuing that point directly must still expose swept contact risk.
         obs['target'].update(targetSpeed=0)
         obs['task']['reference_course_deg']=180
+        obs['task'].pop('following_request',None)
         payload=raw_payload(obs)
         self.assertEqual(len(payload['questions']['action']['criteria']),128)
         choices=list(payload['questions']['action']['criteria'].values())
         self.assertTrue(any(c['hull_clearance_m'][2]<0 for c in choices))
-        self.assertTrue(all('tracking_error_m' in c and 'safety_clearance_m' in c for c in choices))
+        self.assertTrue(all('region_error_m' in c and 'safety_clearance_m' in c for c in choices))
         self.assertTrue(all(len(c['safety_clearance_m'])==4 for c in choices))
 
-    def test_current_point_tracking_does_not_chase_extrapolated_turn(self):
+    def test_recovery_geometry_handles_both_sides_inside_protection_and_degenerate_band(self):
+        from geometry.following import FollowingGeometry, request_phase
+        _, obs = self.adapted()
+        geometry = FollowingGeometry(obs)
+        ahead = geometry.bypass_distances((0,150))
+        self.assertAlmostEqual(ahead[0],ahead[1])
+        # Bypassing the disk is longer than the straight distance to the set.
+        self.assertGreater(ahead[0],geometry.region((0,150))['sector_error_m'])
+        self.assertEqual(geometry.bypass_distances((0,-150)),[0,0])
+        right, left = (geometry.bypass_distances(q) for q in ((140,50),(-140,50)))
+        self.assertAlmostEqual(right[0],left[1])
+        self.assertAlmostEqual(right[1],left[0])
+        # A stopped target ahead requires a tangent detour, never a reference
+        # through its protection disk. Mirror symmetry must survive rotation.
+        geometry.speed=0
+        lengths,courses=geometry.bypass((0,150))
+        self.assertTrue(90<courses[0]<180)
+        self.assertTrue(180<courses[1]<270)
+        self.assertAlmostEqual(courses[0]+courses[1],360)
+        geometry.course=90
+        rotated_lengths,rotated_courses=geometry.bypass((150,0))
+        self.assertEqual(lengths,rotated_lengths)
+        for a,b in zip(courses,rotated_courses): self.assertAlmostEqual((b-a)%360,90)
+        geometry.course=0
+        from geometry.relative_motion import direction
+        _,boundary_courses=geometry.bypass(tuple(100*x for x in direction(270)))
+        self.assertTrue(all(c is None or 0<=c<360 for c in boundary_courses))
+        for lower,upper in ((0,200),(100,200),(150,150)):
+            obs['task'].update(followDistanceMinM=lower,followDistanceMaxM=upper)
+            g=FollowingGeometry(obs)
+            for q in ((0,0),(0,5),(0,100),(1000,0),(0,-300)):
+                self.assertTrue(all(math.isfinite(v) and v>=0 for v in g.bypass_distances(q)))
+        obs['task'].update(followDistanceMinM=100,followDistanceMaxM=200)
+        geometry.current.update(in_sector=False,sector_error_m=15,distance_m=215,along_behind_m=215)
+        self.assertEqual(request_phase(geometry,'maintain')['phase'],'maintain')
+        self.assertEqual(request_phase(geometry,'recover')['phase'],'recover')
+        geometry.current.update(distance_m=99,sector_error_m=1)
+        self.assertEqual(request_phase(geometry,'maintain')['phase'],'recover')
+        geometry.relative=(150,-1)
+        geometry.current=geometry.position(geometry.relative,geometry.course)
+        self.assertTrue(geometry.current['in_sector'])
+        self.assertEqual(request_phase(geometry,'recover')['phase'],'recover')
+        geometry.relative=(0,-150)
+        geometry.current=geometry.position(geometry.relative,geometry.course)
+        self.assertEqual(request_phase(geometry,'recover')['phase'],'maintain')
+
+    def test_phase_uses_current_snapshot_and_reset_clears_hysteresis(self):
+        task,records=self.wire()
+        adapter,obs=self.adapted(task,records)
+        self.assertEqual(obs['task']['following_request']['phase'],'maintain')
+        # The target reverses while range is unchanged: this is a loss.
+        task['unity_only'].update(tick=50,decision_id='turn')
+        records[1]['targetCourse']=180
+        obs=adapter.observation(dict(task,situation=records),TASK)['observation']
+        self.assertEqual(obs['task']['following_request']['phase'],'recover')
+        self.assertEqual(obs['task']['following_request']['reason'],'ahead')
+        p=build_payload(obs)
+        self.assertEqual(len(p['questions']['action']['criteria']),128)
+        self.assertLess(len(json.dumps(p).encode()),65000)
+        # 15 m from the outer boundary is within leave but outside enter.
+        records[1].update(targetCourse=0,longitude=geo(0,215)[0],latitude=geo(0,215)[1])
+        adapter.task_state['following_phase']='maintain'
+        task['unity_only'].update(tick=100,decision_id='near')
+        obs=adapter.observation(dict(task,situation=records),TASK)['observation']
+        self.assertEqual(obs['task']['following_request']['phase'],'maintain')
+        task['id']='fresh-run'
+        task['unity_only'].update(tick=0,decision_id='reset')
+        adapter.add_task(task,TASK)
+        obs=adapter.observation(dict(task,situation=records),TASK)['observation']
+        self.assertEqual(obs['task']['following_request']['phase'],'recover')
+
+    def test_region_forecast_uses_the_same_observed_turn_as_safety(self):
         from geometry.following import FollowingGeometry
         _,obs = self.adapted()
         straight = FollowingGeometry(obs)
         obs['task']['target_motion'] = dict(yaw_deg_s=12,acceleration_mps2=0)
         turning = FollowingGeometry(obs)
+        straight.relative=turning.relative=(140,-30)
         motion = predict_ground_motion(10*KNOT_MPS,10*KNOT_MPS,0,obs['execution'],12,dt=.1,route_details=False)
         a,b = (g.forecast(motion,12,.1) for g in (straight,turning))
-        # Same current position/direction/velocity means the same pursuit point;
-        # the observed turn still changes the independent collision forecast.
+        displacement,course,_=turning.target_at(12)
+        q=tuple(turning.relative[j]+motion['endpoint'][j]-displacement[j] for j in (0,1))
+        from geometry.following import sector_facts
+        expected=sector_facts(q,course,turning.inner,turning.outer,90-turning.angle_margin)
+        self.assertAlmostEqual(b['region_error_m'],expected['sector_error_m'])
+        # Maintaining the V4 point still does not chase a rotating rear point.
         self.assertAlmostEqual(a['tracking_error_m'],b['tracking_error_m'])
-        self.assertEqual(straight.guidance(12),turning.guidance(12))
-        self.assertGreater(abs(a['minimum_m']-b['minimum_m']),1)
+        self.assertEqual(turning.target_at(12)[1],144)
 
     def test_stop_is_separate_and_keeps_current_motion_safety_and_limit(self):
         task, records = self.wire()

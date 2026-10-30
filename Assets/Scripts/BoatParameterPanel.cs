@@ -13,6 +13,8 @@ public class BoatParameterPanel : MonoBehaviour
     private string accompanyMaxSpeed = "0", targetSpeed = "10", referenceCourse = "0", accompanyError;
     private bool accompanySettingsApplied;
     private bool syncHeading = true;
+    private string specialAngle = "0", specialSpeed = "25", specialDistance = "15";
+    private string specialTargetSpeed = "10", specialCourse = "0", specialError;
     private static readonly string[] mapButtons = { "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
     private static readonly string[] decisionModes = { "Paused", "Continuous" };
     private static readonly string[] mapDescriptions = {
@@ -90,9 +92,41 @@ public class BoatParameterPanel : MonoBehaviour
         if (mission != null)
         {
             GUILayout.Label("TASK MODE", titleStyle);
-            int taskMode = GUILayout.SelectionGrid((int)mission.Mode, new[] { "Route", "Following", "Accompany" }, 3);
+            int taskMode = GUILayout.SelectionGrid((int)mission.Mode, new[] { "Route", "Following", "Accompany", "SpecialTrack" }, 2);
             if (taskMode != (int)mission.Mode) mission.SelectTaskMode((MissionManager.TaskMode)taskMode);
-            if (mission.IsAccompany)
+            if (mission.IsSpecialTrack)
+            {
+                var s = mission.SpecialTrack;
+                GUILayout.Label("SPECIAL TARGET TRACK", titleStyle);
+                int scenario = GUILayout.SelectionGrid(s.ScenarioIndex, MovingTargetScenarios.Names, 2);
+                if (scenario != s.ScenarioIndex) mission.SelectSpecialTrackScenario(scenario);
+                GUILayout.Label("Expected position bearing (deg; clockwise from target bow)", hintStyle);
+                specialAngle = GUILayout.TextField(specialAngle);
+                GUILayout.Label("0 ahead / 90 right / 180 astern / 270 left", hintStyle);
+                GUILayout.Label("Expected own speed (knots) / centre distance (m)", hintStyle);
+                GUILayout.BeginHorizontal(); specialSpeed = GUILayout.TextField(specialSpeed); specialDistance = GUILayout.TextField(specialDistance); GUILayout.EndHorizontal();
+                GUILayout.Label("Target speed (knots) / initial course (deg)", hintStyle);
+                GUILayout.BeginHorizontal(); specialTargetSpeed = GUILayout.TextField(specialTargetSpeed); specialCourse = GUILayout.TextField(specialCourse); GUILayout.EndHorizontal();
+                if (GUILayout.Button("Apply special-track settings and reset"))
+                    specialError = TryNumber(specialAngle, out var angle) && TryNumber(specialSpeed, out var speed)
+                        && TryNumber(specialDistance, out var distance) && TryNumber(specialTargetSpeed, out var target)
+                        && TryNumber(specialCourse, out var course) && s.Configure(angle, speed, distance, target, course)
+                        ? null : "Use bearing [0,360), achievable own speed, positive centre distance.";
+                if (specialError != null) GUILayout.Label(specialError, hintStyle);
+                GUILayout.Label($"Active: {s.ExpectedAngle:F1} deg / {s.ExpectedSpeedKnots:F1} knots / {s.ExpectedDistance:F1} m", labelStyle);
+                GUILayout.Label($"Target: {s.Speed / DiscreteAction.MetresPerSecondPerKnot:F1} knots | course {s.Course:F1} deg", labelStyle);
+                GUILayout.Label(s.ScenarioIndex == 0 ? "Target holds a straight course and speed."
+                    : s.ScenarioIndex == 1 ? "Target starts turning at 6 s."
+                    : s.ScenarioIndex == 2 ? "Straight course: slow at 6 s, stop at 12 s, restart at 20 s."
+                    : "Target starts irregular manoeuvres at 6 s.", hintStyle);
+                GUILayout.Label($"{s.Status} | elapsed {s.Elapsed:F1} s", labelStyle);
+                GUILayout.Label($"Position error {s.PositionError:F2} m (capture {s.CaptureRadius:F2} m)", labelStyle);
+                GUILayout.Label($"Distance {s.Distance:F2} m | error {s.DistanceError:F2} m", labelStyle);
+                GUILayout.Label($"Bearing {s.Bearing:F1} deg | error {s.BearingError:F1} deg", labelStyle);
+                GUILayout.Label($"Speed error {s.SpeedError:F2} knots | bow error {s.PointingError:F1} deg", labelStyle);
+                GUILayout.Label("Freezes on position capture or collision. Four-condition acceptance is not asserted. Cyan: capture point and desired bow. Magenta: target.", hintStyle);
+            }
+            else if (mission.IsAccompany)
             {
                 var a = mission.Accompany;
                 GUILayout.Label("FRIENDLY ACCOMPANY", titleStyle);
@@ -251,7 +285,7 @@ public class BoatParameterPanel : MonoBehaviour
         }
         GUILayout.Label("Speed and turn rates are acceleration-limited. Settings apply in Manual and Jev modes.", hintStyle);
         var obstacles = GetComponent<DynamicObstacleField>();
-        if (obstacles != null && (mission == null || !mission.IsAccompany))
+        if (obstacles != null && (mission == null || (!mission.IsAccompany && !mission.IsSpecialTrack)))
         {
             obstacles.smallAvoidanceRadius = DrawSlider("Small target avoidance", obstacles.smallAvoidanceRadius, 10f, 100f, "m");
             obstacles.largeAvoidanceRadius = DrawSlider("Large target avoidance", obstacles.largeAvoidanceRadius, 80f, 100f, "m");

@@ -142,7 +142,8 @@ def serve(settings):
                         if event in ("mission_completed", "stop_completed", "simulation_collision", "simulation_cancelled"):
                             active.pop(key, None)
                             if event in ("mission_completed", "stop_completed"):
-                                send_status(sock, task, 2, "completed" if event == "mission_completed" else "stopped")
+                                description = "position_reached; inspect terminal errors" if event == "mission_completed" and task['code'] == 'SpecialTargetTrackMode' else "completed" if event == "mission_completed" else "stopped"
+                                send_status(sock, task, 2, description)
                             adapter.finish(key)
                             if log:
                                 log.write(dumps({"event": event, "notification": task}) + "\n"); log.flush()

@@ -6,16 +6,18 @@ using UnityEngine;
 public sealed class MissionManager : MonoBehaviour
 {
     public const int MaxMapLevel = 4;
-    public enum TaskMode { Route, Following, Accompany }
+    public enum TaskMode { Route, Following, Accompany, SpecialTrack }
     public TaskMode Mode { get; private set; }
     public bool IsFollowing => Mode == TaskMode.Following;
     public bool IsAccompany => Mode == TaskMode.Accompany;
-    public bool HasMovingTarget => IsFollowing || IsAccompany;
+    public bool IsSpecialTrack => Mode == TaskMode.SpecialTrack;
+    public bool HasMovingTarget => IsFollowing || IsAccompany || IsSpecialTrack;
+    public SpecialTrackTarget SpecialTrack { get; private set; }
     public FollowingTarget Following { get; private set; }
     public AccompanyTarget Accompany { get; private set; }
-    public bool HasTask => IsAccompany ? Accompany?.Scenario != null : IsFollowing ? Following?.Scenario != null : Progress != null;
-    public bool Completed => IsAccompany ? Accompany.Completed : IsFollowing ? Following.Completed : Progress != null && Progress.Completed;
-    public string TaskCode => IsAccompany ? "accompanyMode" : IsFollowing ? "followMode" : "trackingMode";
+    public bool HasTask => IsSpecialTrack ? SpecialTrack?.Scenario != null : IsAccompany ? Accompany?.Scenario != null : IsFollowing ? Following?.Scenario != null : Progress != null;
+    public bool Completed => IsSpecialTrack ? SpecialTrack.Completed : IsAccompany ? Accompany.Completed : IsFollowing ? Following.Completed : Progress != null && Progress.Completed;
+    public string TaskCode => IsSpecialTrack ? "SpecialTargetTrackMode" : IsAccompany ? "accompanyMode" : IsFollowing ? "followMode" : "trackingMode";
     [Tooltip("Empty uses the bundled StreamingAssets task. Absolute or project-relative paths are supported on desktop.")]
     public string routeFile = "";
     public int MapLevel { get; private set; }
@@ -28,13 +30,14 @@ public sealed class MissionManager : MonoBehaviour
     public event Action RouteChanged;
     private BoatDynamics2D boat;
 
-    void Awake() { boat = GetComponent<BoatDynamics2D>(); Following = GetComponent<FollowingTarget>() ?? gameObject.AddComponent<FollowingTarget>(); Accompany = GetComponent<AccompanyTarget>() ?? gameObject.AddComponent<AccompanyTarget>(); }
+    void Awake() { boat = GetComponent<BoatDynamics2D>(); Following = GetComponent<FollowingTarget>() ?? gameObject.AddComponent<FollowingTarget>(); Accompany = GetComponent<AccompanyTarget>() ?? gameObject.AddComponent<AccompanyTarget>(); SpecialTrack = GetComponent<SpecialTrackTarget>() ?? gameObject.AddComponent<SpecialTrackTarget>(); }
     void OnEnable() { boat.ResetPerformed += ResetProgress; }
     void OnDisable() { boat.ResetPerformed -= ResetProgress; }
     void Start() { if (!HasTask) Reload(); }
 
     public bool Reload()
     {
+        if (IsSpecialTrack) return SelectSpecialTrackScenario(SpecialTrack.ScenarioIndex);
         if (IsFollowing) return SelectFollowingScenario(Following.ScenarioIndex);
         if (IsAccompany) return SelectAccompanyScenario(Accompany.ScenarioIndex);
         string path = string.IsNullOrWhiteSpace(routeFile)
@@ -74,7 +77,7 @@ public sealed class MissionManager : MonoBehaviour
                 throw new FormatException("Initial velocity exceeds the current boat limits.");
             // Parse/validate before committing; an invalid replacement leaves the active task intact.
             next.arrival_radius_m = boat.WaypointRadius;
-            Mode = TaskMode.Route; Following.ClearVisuals(); Accompany.ClearVisuals(); Route = next;
+            Mode = TaskMode.Route; Following.ClearVisuals(); Accompany.ClearVisuals(); SpecialTrack.ClearVisuals(); Route = next;
             Progress = new MissionProgress(next);
             Revision++;
             LoadError = null;
@@ -86,14 +89,14 @@ public sealed class MissionManager : MonoBehaviour
         catch (Exception error) { LoadError = error.Message; return false; }
     }
 
-    public bool SelectTaskMode(TaskMode mode) => mode == Mode || (mode == TaskMode.Accompany ? SelectAccompanyScenario(0)
+    public bool SelectTaskMode(TaskMode mode) => mode == Mode || (mode == TaskMode.SpecialTrack ? SelectSpecialTrackScenario(0) : mode == TaskMode.Accompany ? SelectAccompanyScenario(0)
         : mode == TaskMode.Following ? SelectFollowingScenario(0) : SelectMapLevel(MapLevel));
     public bool SelectAccompanyScenario(int index)
     {
         try
         {
             var next = Accompany.BuildScenario(index);
-            Accompany.Load(next, index); Following.ClearVisuals();
+            Accompany.Load(next, index); Following.ClearVisuals(); SpecialTrack.ClearVisuals();
             Mode = TaskMode.Accompany; Route = null; Progress = null; routeFile = "";
             Revision++; LoadError = null;
             boat.ConfigureInitialState(next.initial_state); boat.ResetBoat(); RouteChanged?.Invoke(); return true;
@@ -110,7 +113,7 @@ public sealed class MissionManager : MonoBehaviour
             if (next.initial_state.speed < -boat.maxReverseSpeed || next.initial_state.speed > boat.maxForwardSpeed
                 || Mathf.Abs(next.initial_state.yaw_rate_deg) > boat.maxYawRateDeg)
                 throw new FormatException("Initial velocity exceeds boat limits.");
-            Following.Load(next, index); Accompany.ClearVisuals();
+            Following.Load(next, index); Accompany.ClearVisuals(); SpecialTrack.ClearVisuals();
             Mode = TaskMode.Following; Route = null; Progress = null; routeFile = "";
             Revision++; LoadError = null;
             boat.ConfigureInitialState(next.initial_state); boat.ResetBoat(); RouteChanged?.Invoke(); return true;
@@ -118,9 +121,21 @@ public sealed class MissionManager : MonoBehaviour
         catch (Exception error) { LoadError = error.Message; return false; }
     }
 
+    public bool SelectSpecialTrackScenario(int index)
+    {
+        try
+        {
+            var next = SpecialTrack.BuildScenario(index);
+            SpecialTrack.Load(next, index); Following.ClearVisuals(); Accompany.ClearVisuals();
+            Mode = TaskMode.SpecialTrack; Route = null; Progress = null; routeFile = "";
+            Revision++; LoadError = null; boat.ConfigureInitialState(next.initial_state); boat.ResetBoat();
+            RouteChanged?.Invoke(); return true;
+        }
+        catch (Exception error) { LoadError = error.Message; return false; }
+    }
     public void SynchronizeHull() { if (Route != null) Route.arrival_radius_m = boat.WaypointRadius; }
-    private void ResetProgress() { SynchronizeHull(); Failed = false; FailureReason = null; if (IsAccompany) Accompany.ResetTarget(); else if (IsFollowing) Following.ResetTarget(); else Progress?.Reset(boat.Position, boat.Speed); }
+    private void ResetProgress() { SynchronizeHull(); Failed = false; FailureReason = null; if (IsSpecialTrack) SpecialTrack.ResetTarget(); else if (IsAccompany) Accompany.ResetTarget(); else if (IsFollowing) Following.ResetTarget(); else Progress?.Reset(boat.Position, boat.Speed); }
     public void FailCollision(string obstacleId) { Failed = true; FailureReason = "Collision with " + obstacleId + ". Reset required."; }
     public void Evaluate(Vector2 previous, float previousSpeed) { Progress?.Evaluate(previous, boat.Position, boat.Speed, previousSpeed); }
-    public string Status => Failed ? "Failed" : !HasTask ? "NoTask" : Completed ? "Completed" : IsAccompany ? Accompany.Status : IsFollowing ? Following.TrackingStatus : "Running";
+    public string Status => Failed ? "Failed" : !HasTask ? "NoTask" : IsSpecialTrack ? SpecialTrack.Status : Completed ? "Completed" : IsAccompany ? Accompany.Status : IsFollowing ? Following.TrackingStatus : "Running";
 }

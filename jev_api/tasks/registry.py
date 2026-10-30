@@ -6,12 +6,13 @@
 # ACTION_CHOICES/COURSES_DEG belong to each task; shared STOP also uses DIRECTIONS.
 # Route keeps 64 choices; following/accompaniment use the finer 128 grid.
 
-from tasks import task1_waypoint, task2_following, task3_accompany, stop
+from tasks import task1_waypoint, task2_following, task3_accompany, task6_special_target_track, stop
 
 TASKS = {
     "trackingMode": task1_waypoint,
     "followMode": task2_following,
     "accompanyMode": task3_accompany,
+    "SpecialTargetTrackMode": task6_special_target_track,
 }
 
 

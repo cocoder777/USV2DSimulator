@@ -10,6 +10,8 @@ from matplotlib.patches import Circle, Wedge
 
 
 def plot_run(document, output):
+    if document.get("task_mode") == "SpecialTargetTrackMode":
+        return plot_special_track(document, output)
     if document.get("task_mode") == "accompanyMode":
         return plot_accompany(document, output)
     if document.get("task_mode") in ("followMode", "targetFollowing"):
@@ -73,6 +75,35 @@ def plot_run(document, output):
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output, dpi=180, facecolor="white")
+    finally:
+        plt.close(fig)
+
+
+def plot_special_track(document, output):
+    samples = document['samples']
+    metrics = document['special_track_metrics']
+    times = [s['simulation_time'] for s in samples]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), layout='constrained')
+    try:
+        world, position, angles, speed = axes.flat
+        world.plot([s['x'] for s in samples], [s['y'] for s in samples], label='Own boat')
+        world.plot([s['target']['x'] for s in samples], [s['target']['y'] for s in samples], label='Target', color='magenta')
+        world.plot([s['target']['goal_x'] for s in samples], [s['target']['goal_y'] for s in samples], ':', label='Moving terminal point', color='teal')
+        last = samples[-1]['target']
+        world.add_patch(Circle((last['goal_x'], last['goal_y']), metrics['terminal_errors']['position_capture_radius_m'], fill=False, color='teal'))
+        world.add_patch(Circle((last['x'], last['y']), last['radius_m'], fill=False, color='magenta'))
+        world.add_patch(Circle((samples[-1]['x'], samples[-1]['y']), document['boat_radius_m'], fill=False, color='blue'))
+        world.set_aspect('equal', adjustable='datalim'); world.legend()
+        for key, label in (('position_error_m', 'Position-point error (m)'), ('distance_error_m', 'Centre-distance error (m)')):
+            position.plot(times, [s['target']['errors'][key] for s in samples], label=label)
+        for key, label in (('bearing_error_deg', 'Position bearing error'), ('pointing_error_deg', 'Bow pointing error')):
+            angles.plot(times, [s['target']['errors'][key] for s in samples], label=label)
+        speed.plot(times, [s['target']['errors']['speed_error_knots'] for s in samples], label='Own speed error (knots)')
+        for ax in (position, angles, speed): ax.axhline(0, color='grey', linewidth=.6); ax.legend(); ax.set_xlabel('Simulation seconds')
+        for ax in axes.flat: ax.grid(True, alpha=.25)
+        fig.suptitle(f"Special track | {document['result']} | position capture only; inspect all four errors")
+        output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output, dpi=160, facecolor='white')
     finally:
         plt.close(fig)
 

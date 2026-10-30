@@ -133,7 +133,8 @@ class UnitySnapshotAdapter:
         if abs(boat["targetSpeed"]) < 1e-6:
             boat["targetCourse"] = None
         task_module = get_task(task["code"])
-        target_id = task_module.target_platform_id(params)
+        resolver = getattr(task_module, 'resolve_target_platform_id', None)
+        target_id = resolver(params, task['situation']) if resolver else task_module.target_platform_id(params)
         maximum = local["max_speed_knots"]
         if type(maximum) not in (int, float) or not math.isfinite(maximum) or maximum <= 0:
             raise ValueError("Invalid candidate speed limit")

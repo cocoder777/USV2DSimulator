@@ -74,7 +74,12 @@ public class BoatUdpBridge : MonoBehaviour
                 (runner.State == SimulationRunner.RunState.Failed && (int)packet["status"] != 3) ||
                 ((runner.State == SimulationRunner.RunState.Completed || runner.State == SimulationRunner.RunState.Stopped) && (int)packet["status"] != 2))) continue;
             if (packet["status"] != null)
-            { AlgorithmStatus = (int)packet["status"]; AlgorithmDescription = (string)packet["description"]; }
+            {
+                AlgorithmStatus = (int)packet["status"]; AlgorithmDescription = (string)packet["description"];
+                if (GetComponent<MissionManager>().IsSpecialTrack && packet["inTerminal"]?.Type == JTokenType.Integer
+                    && (int)packet["inTerminal"] is 0 or 1)
+                    GetComponent<MissionManager>().SpecialTrack.SetTerminalApproach((int)packet["inTerminal"] == 1);
+            }
             if (packet["type"] != null) DecisionReceived?.Invoke(packet);
         }
     }
@@ -155,7 +160,7 @@ public class BoatUdpBridge : MonoBehaviour
                             {
                                 var status = reassembler.Add(data, source.ToString());
                                 if (status == null) continue;
-                                if ((string)status["code"] is not ("trackingMode" or "followMode" or "accompanyMode")) throw new FormatException("Unexpected algorithm code.");
+                                if ((string)status["code"] is not ("trackingMode" or "followMode" or "accompanyMode" or "SpecialTargetTrackMode")) throw new FormatException("Unexpected algorithm code.");
                                 if ((int?)status["status"] is not (1 or 2 or 3)) throw new FormatException("Invalid algorithm status.");
                                 var meta = status["params"]?["unity_only"] as JObject;
                                 var result = StatusEnvelope(status, meta);
@@ -201,6 +206,7 @@ public class BoatUdpBridge : MonoBehaviour
     }
     static JObject StatusEnvelope(JObject status, JObject meta) => new JObject {
         ["episode_id"] = status["simId"]?.DeepClone(), ["run_id"] = status["id"]?.DeepClone(),
+        ["inTerminal"] = status["params"]?["inTerminal"]?.DeepClone(),
         ["decision_id"] = meta?["decision_id"]?.DeepClone(), ["tick"] = meta?["tick"]?.DeepClone() };
     void Enqueue(JObject value) { lock (gate) { if (incoming.Count >= 64) incoming.Dequeue(); incoming.Enqueue(value); } }
     void OnDisable()

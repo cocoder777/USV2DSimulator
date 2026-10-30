@@ -13,9 +13,9 @@ def status_content(task, status, description, contexts, result=None, control_sta
     params = task_module.status_params(context, observation)
     local = task.get("unity_only", {})
     if local.get("decision_id"):
-        params["unity_only"] = {k: local[k] for k in ("decision_id", "tick")}
+        params.setdefault("unity_only", {}).update({k: local[k] for k in ("decision_id", "tick")})
     if result is not None:
-        params["unity_only"] = {k: result[k] for k in ("decision_id", "tick")}
+        params.setdefault("unity_only", {}).update({k: result[k] for k in ("decision_id", "tick")})
         if control_stamp is not None:
             params["unity_only"]["control_timestamp"] = control_stamp
     content = {k: task[k] for k in ("simId", "id", "code")}

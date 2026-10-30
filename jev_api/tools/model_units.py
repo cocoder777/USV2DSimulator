@@ -83,6 +83,31 @@ def model_speed_units(builder):
                 row = [rounded(facts[k], 1 if k.endswith(('_m', '_deg')) else 3) for k in columns]
                 criteria[name] = json.dumps(rounded(row), ensure_ascii=False,
                                             allow_nan=False, separators=(",", ":"))
+        if observation['task']['code'] == 'SpecialTargetTrackMode':
+            for name, facts in criteria.items():
+                unit, speed_key = ('knots','command_speed_knots') if 'command_speed_knots' in facts else ('m/s','command_speed_mps')
+                suffix = 'knots' if unit=='knots' else 'mps'
+                compact = lambda v: json.dumps(rounded(v,1),allow_nan=False,separators=(',',':'))
+                statement = f"Set {facts[speed_key]:.3f} {unit}, absolute course {facts['course_deg']:g} deg. "
+                if 'setup_error_m' in facts:
+                    statement += (f"Setup point error after action/if held {compact(facts['setup_error_m'])} m. "
+                        f"Setup reference deviation command/actual end {compact(facts['setup_guidance_error_deg'])} deg. ")
+                    if facts['capture_time_s'] is not None:
+                        statement += (f"First capture at {facts['capture_time_s']:.2f}s: speed error {facts['capture_speed_error_'+suffix]:.3f} {unit}, "
+                                      f"pointing error {facts['capture_pointing_error_deg']:.1f} deg. ")
+                elif 'end_position_error_m' in facts:
+                    statement += (f"Action-end errors: position {facts['end_position_error_m']:.1f} m, bearing {facts['end_bearing_error_deg']:.1f} deg, "
+                        f"speed {facts['end_speed_error_'+suffix]:.3f} {unit}, pointing {facts['end_pointing_error_deg']:.1f} deg. "
+                        f"Reference deviation command/actual end {compact(facts['guidance_error_deg'])} deg. "
+                        + ('First capture' if facts['pass_is_capture'] else 'Closest pass without capture')
+                        + f" at {facts['pass_time_s']:.2f}s: position error {facts['pass_position_error_m']:.1f} m, "
+                        f"bearing error {facts['pass_bearing_error_deg']:.1f} deg, speed error {facts['pass_speed_error_'+suffix]:.3f} {unit}, "
+                        f"pointing error {facts['pass_pointing_error_deg']:.1f} deg. ")
+                else:
+                    statement += f"End speed {facts['end_speed_'+suffix]:.3f} {unit}, displacement {facts['travel_m']:.1f} m. "
+                if 'clearance_m' in facts:
+                    statement += f"Hull clearance {compact(facts['clearance_m'])} m."
+                criteria[name] = statement
         for name, facts in criteria.items():
             if isinstance(facts, dict):
                 criteria[name] = json.dumps(rounded(facts), ensure_ascii=False, allow_nan=False, separators=(",", ":"))

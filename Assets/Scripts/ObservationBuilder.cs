@@ -48,6 +48,11 @@ public static class ObservationBuilder
             situation.Add(mission.Accompany.Observe());
             radii[AccompanyTarget.PlatformId.ToString()] = mission.Accompany.Scenario.target.radius_m;
         }
+        if (mission.IsSpecialTrack)
+        {
+            situation.Add(mission.SpecialTrack.Observe());
+            radii[SpecialTrackTarget.PlatformId.ToString()] = mission.SpecialTrack.Scenario.target.radius_m;
+        }
         foreach (JObject obstacle in boat.GetComponent<DynamicObstacleField>()?.Observe() ?? new JArray())
         {
             situation.Add(obstacle.DeepClone());
@@ -55,7 +60,7 @@ public static class ObservationBuilder
         }
         foreach (JObject point in waypoints) point["routeSpeed"] = (double)point["routeSpeed"] / DiscreteAction.MetresPerSecondPerKnot;
         var observation = new JObject {
-            ["params"] = mission.IsAccompany ? mission.Accompany.Parameters() : mission.IsFollowing ? mission.Following.Parameters() : new JObject {
+            ["params"] = mission.IsSpecialTrack ? mission.SpecialTrack.Parameters() : mission.IsAccompany ? mission.Accompany.Parameters() : mission.IsFollowing ? mission.Following.Parameters() : new JObject {
                 ["platCode"] = ownPlatform, ["planRouteNum"] = mission.MapLevel,
                 ["currentRoute"] = Math.Max(0, mission.Progress.NextIndex - 1),
                 ["planWaypointNum"] = waypoints.Count, ["planWaypointList"] = waypoints },
@@ -80,6 +85,7 @@ public static class ObservationBuilder
                     ["obstacle_avoidance_radii_m"] = boat.GetComponent<DynamicObstacleField>()?.AvoidanceRadii() ?? new JObject() } }
         };
         if (mission.IsAccompany) observation["unity_only"]["target_reference_course_deg"] = mission.Accompany.Course;
+        if (mission.IsSpecialTrack) observation["unity_only"]["target_reference_course_deg"] = mission.SpecialTrack.Course;
         if (mission.IsFollowing && mission.Following.Speed < 0.2f)
             observation["unity_only"]["target_reference_course_deg"] = mission.Following.ReferenceCourse;
         if (!mission.HasMovingTarget) observation["unity_only"]["arrival_radius_m"] = route.arrival_radius_m;

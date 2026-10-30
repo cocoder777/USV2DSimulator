@@ -30,8 +30,8 @@ public class BoatCameraFollow : MonoBehaviour
         float size = orthographicSize;
         if (overview && mission != null && mission.HasMovingTarget)
         {
-            var other = mission.IsAccompany ? mission.Accompany.Position : mission.Following.Position;
-            float margin = mission.IsAccompany ? 200 : mission.Following.MaxDistance;
+            var other = mission.IsSpecialTrack ? mission.SpecialTrack.Position : mission.IsAccompany ? mission.Accompany.Position : mission.Following.Position;
+            float margin = mission.IsSpecialTrack ? Mathf.Max(30, mission.SpecialTrack.ExpectedDistance * 1.5f) : mission.IsAccompany ? 200 : mission.Following.MaxDistance;
             focus = (target.position + new Vector3(other.x, other.y, 0)) / 2;
             size = Mathf.Max(Mathf.Abs(other.y - target.position.y) / 2 + margin,
                 (Mathf.Abs(other.x - target.position.x) / 2 + margin) / view.aspect);
